@@ -1,0 +1,18 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"paths": {
+			"*": ["./*"],
+			"@loopiq/ai": ["./packages/ai/src/index.ts"],
+			"@loopiq/ai/oauth": ["./packages/ai/src/oauth.ts"],
+			"@loopiq/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
+			"@loopiq/ai/dist/*": ["./packages/ai/src/*"],
+			"@loopiq/agent-core": ["./packages/agent/src/index.ts"],
+			"@loopiq/agent-core/*": ["./packages/agent/src/*"],
+			"typebox": ["./node_modules/typebox"]
+		}
+	},
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "examples/**/*"],
+	"exclude": ["**/dist/**"]
+}
