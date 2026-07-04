@@ -8,6 +8,7 @@
 		"build": "cd packages/ai && npm run build && cd ../agent && npm run build",
 		"test": "npm run test --workspaces --if-present",
 		"check": "biome check --write .",
+		"presmoke": "npm run build",
 		"smoke": "tsx examples/smoke.ts"
 	},
 	"devDependencies": {
