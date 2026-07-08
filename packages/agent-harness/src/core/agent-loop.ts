@@ -20,7 +20,7 @@ import type {
 	StreamFn,
 } from "../base/options.ts";
 import type { ToolExecutionMode } from "../base/resource.ts";
-import { executeToolCalls } from "./tool-execuation.ts";
+import { executeToolCalls } from "./tool-execution.ts";
 
 /**
  * Direct parameters handed to the agent loop.
