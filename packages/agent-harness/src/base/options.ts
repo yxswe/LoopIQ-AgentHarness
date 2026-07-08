@@ -1,13 +1,8 @@
 import type {
-	Api,
-	AssistantMessage,
-	AssistantMessageEventStream,
-	Context,
 	Message,
 	Model,
 	Models,
 	SimpleStreamOptions,
-	ToolResultMessage,
 	Transport,
 } from "@loopiq/ai";
 import type { AgentMessage } from "./messages.ts";
@@ -22,56 +17,12 @@ import type { ExecutionEnv, FileOperations } from "./env.ts";
 import type { Session } from "../session/session.ts";
 
 /**
- * Stream function used by the agent loop. `Models.streamSimple` satisfies
- * this shape.
- *
- * Contract:
- * - Must not throw or return a rejected promise for request/model/runtime failures.
- * - Must return an AssistantMessageEventStream.
- * - Failures must be encoded in the returned stream via protocol events and a
- *   final AssistantMessage with stopReason "error" or "aborted" and errorMessage.
- */
-export type StreamFn = (
-	model: Model<Api>,
-	context: Context,
-	options?: SimpleStreamOptions,
-) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
-
-
-
-/**
  * Controls how many queued user messages are injected when the agent loop reaches a queue drain point.
  *
  * - "all": drain and inject every queued message at that point.
  * - "one-at-a-time": drain and inject only the oldest queued message, leaving the rest queued for later drain points.
  */
 export type QueueMode = "all" | "one-at-a-time";
-
-
-
-/** Context passed to `shouldStopAfterTurn`. */
-export interface ShouldStopAfterTurnContext {
-	/** The assistant message that completed the turn. */
-	message: AssistantMessage;
-	/** Tool result messages passed to the preceding `turn_end` event. */
-	toolResults: ToolResultMessage[];
-	/** Current agent context after the turn's assistant message and tool results have been appended. */
-	context: AgentContext;
-	/** Messages that this loop invocation will return if it exits at this point. Prompt runs include the initial prompt messages; continuation runs do not include pre-existing context messages. */
-	newMessages: AgentMessage[];
-}
-
-export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
-
-/** Replacement runtime state used by the agent loop before starting another provider request. */
-export interface AgentLoopTurnUpdate {
-	/** Context for the next provider request. */
-	context?: AgentContext;
-	/** Model for the next provider request. */
-	model?: Model<any>;
-	/** Thinking level for the next provider request. */
-	thinkingLevel?: ThinkingLevel;
-}
 
 
 

@@ -133,8 +133,6 @@ export class AgentHarness<
 		});
 	}
 
-//////////////////////////////////////////////////////////////////////////////////////////////
-
 	private async executeTurn(
 		turnState: TurnState<TSkill, TPromptTemplate, TTool>,
 		text: string,
@@ -189,7 +187,7 @@ export class AgentHarness<
 			}
 		}
 	}
-///////////////////////////////////////////////////////////////////////////////////////////
+
 	private startRunPromise(): () => void {
 		let finish = () => {};
 		this.runPromise = new Promise<void>((resolve) => {
