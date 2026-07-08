@@ -21,6 +21,7 @@ import type { AgentMessage } from "../base/messages.ts";
 
 import { type AgentLoopParams, runAgentLoop } from "./agent-loop.ts";
 import { createFailureMessage, createUserMessage } from "./message-factory.ts";
+import { applyStreamOptionsPatch, cloneStreamOptions } from "./stream-options.ts";
 import { AgentEventBus } from "./event-bus.ts";
 import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
 import { formatSkillInvocation } from "../skills/skills.ts";
@@ -36,14 +37,6 @@ import {
 	toError,
 } from "../base/types.ts";
 
-function cloneStreamOptions(streamOptions?: AgentHarnessStreamOptions): AgentHarnessStreamOptions {
-	return {
-		...streamOptions,
-		headers: streamOptions?.headers ? { ...streamOptions.headers } : undefined,
-		metadata: streamOptions?.metadata ? { ...streamOptions.metadata } : undefined,
-	};
-}
-
 function findDuplicateNames(names: string[]): string[] {
 	const seen = new Set<string>();
 	const duplicates = new Set<string>();
@@ -52,48 +45,6 @@ function findDuplicateNames(names: string[]): string[] {
 		seen.add(name);
 	}
 	return [...duplicates];
-}
-
-function applyStreamOptionsPatch(
-	base: AgentHarnessStreamOptions,
-	patch?: AgentHarnessStreamOptionsPatch,
-): AgentHarnessStreamOptions {
-	const result = cloneStreamOptions(base);
-	if (!patch) return result;
-
-	if (Object.hasOwn(patch, "transport")) result.transport = patch.transport;
-	if (Object.hasOwn(patch, "timeoutMs")) result.timeoutMs = patch.timeoutMs;
-	if (Object.hasOwn(patch, "maxRetries")) result.maxRetries = patch.maxRetries;
-	if (Object.hasOwn(patch, "maxRetryDelayMs")) result.maxRetryDelayMs = patch.maxRetryDelayMs;
-	if (Object.hasOwn(patch, "cacheRetention")) result.cacheRetention = patch.cacheRetention;
-
-	if (Object.hasOwn(patch, "headers")) {
-		if (patch.headers === undefined) {
-			result.headers = undefined;
-		} else {
-			const headers = { ...(result.headers ?? {}) };
-			for (const [key, value] of Object.entries(patch.headers)) {
-				if (value === undefined) delete headers[key];
-				else headers[key] = value;
-			}
-			result.headers = Object.keys(headers).length > 0 ? headers : undefined;
-		}
-	}
-
-	if (Object.hasOwn(patch, "metadata")) {
-		if (patch.metadata === undefined) {
-			result.metadata = undefined;
-		} else {
-			const metadata = { ...(result.metadata ?? {}) };
-			for (const [key, value] of Object.entries(patch.metadata)) {
-				if (value === undefined) delete metadata[key];
-				else metadata[key] = value;
-			}
-			result.metadata = Object.keys(metadata).length > 0 ? metadata : undefined;
-		}
-	}
-
-	return result;
 }
 
 type AgentHarnessPhase = "idle" | "turn" | "compaction" | "retry";
