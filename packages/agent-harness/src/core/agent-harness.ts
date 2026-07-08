@@ -22,6 +22,7 @@ import type { AgentMessage } from "../base/messages.ts";
 import { type AgentLoopParams, runAgentLoop } from "./agent-loop.ts";
 import { createFailureMessage, createUserMessage } from "./message-factory.ts";
 import { applyStreamOptionsPatch, cloneStreamOptions } from "./stream-options.ts";
+import { buildContext, buildTurnState, type TurnState } from "./turn-state.ts";
 import { AgentEventBus } from "./event-bus.ts";
 import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
 import { formatSkillInvocation } from "../skills/skills.ts";
@@ -48,22 +49,6 @@ function findDuplicateNames(names: string[]): string[] {
 }
 
 type AgentHarnessPhase = "idle" | "turn" | "compaction" | "retry";
-
-interface AgentHarnessTurnState<
-	TSkill extends Skill = Skill,
-	TPromptTemplate extends PromptTemplate = PromptTemplate,
-	TTool extends AgentTool = AgentTool,
-> {
-	messages: AgentMessage[];
-	resources: AgentHarnessResources<TSkill, TPromptTemplate>;
-	streamOptions: AgentHarnessStreamOptions;
-	sessionId: string;
-	systemPrompt: string;
-	model: Model<any>;
-	thinkingLevel: ThinkingLevel;
-	tools: TTool[];
-	activeTools: TTool[];
-}
 
 export class AgentHarness<
 	TSkill extends Skill = Skill,
@@ -129,38 +114,18 @@ export class AgentHarness<
 		if (missing.length > 0) throw new AgentHarnessError("invalid_argument", `Unknown tool(s): ${missing.join(", ")}`);
 	}
 	
-	private async createTurnState(): Promise<AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>> {
-		const context = await this.session.buildContext();
-		const resources = this.getResources();
-		const sessionMetadata = await this.session.getMetadata();
-		const tools = [...this.tools.values()];
-		const activeTools = this.activeToolNames
-			.map((name) => this.tools.get(name))
-			.filter((tool): tool is TTool => tool !== undefined);
-		let systemPrompt = "You are a helpful assistant.";
-		if (typeof this.systemPrompt === "string") {
-			systemPrompt = this.systemPrompt;
-		} else if (this.systemPrompt) {
-			systemPrompt = await this.systemPrompt({
-				env: this.env,
-				session: this.session,
-				model: this.model,
-				thinkingLevel: this.thinkingLevel,
-				activeTools,
-				resources,
-			});
-		}
-		return {
-			messages: context.messages,
-			resources,
-			streamOptions: cloneStreamOptions(this.streamOptions),
-			sessionId: sessionMetadata.id,
-			systemPrompt,
+	private buildTurnStateFromConfig(): Promise<TurnState<TSkill, TPromptTemplate, TTool>> {
+		return buildTurnState({
+			session: this.session,
+			env: this.env,
 			model: this.model,
 			thinkingLevel: this.thinkingLevel,
-			tools,
-			activeTools,
-		};
+			tools: this.tools,
+			activeToolNames: this.activeToolNames,
+			resources: this.getResources(),
+			streamOptions: this.streamOptions,
+			systemPrompt: this.systemPrompt,
+		});
 	}
 
 	private async flushPendingSessionWrites(): Promise<void> {
@@ -267,19 +232,8 @@ export class AgentHarness<
 		return [failureMessage];
 	}
 //////////////////////////////////////////////////////////////////////////////////////////////
-	
-	private createContext(
-		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
-		systemPrompt?: string,
-	): AgentContext {
-		return {
-			systemPrompt: systemPrompt ?? turnState.systemPrompt,
-			messages: turnState.messages.slice(),
-			tools: turnState.activeTools.slice(),
-		};
-	}
 
-	private createStreamFn(getTurnState: () => AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>): StreamFn {
+	private createStreamFn(getTurnState: () => TurnState<TSkill, TPromptTemplate, TTool>): StreamFn {
 		return async (model, context, streamOptions) => {
 			const turnState = getTurnState();
 			const snapshotOptions: AgentHarnessStreamOptions = { ...turnState.streamOptions };
@@ -320,8 +274,8 @@ export class AgentHarness<
 	}
 
 	private createLoopParams(
-		getTurnState: () => AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
-		setTurnState: (turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => void,
+		getTurnState: () => TurnState<TSkill, TPromptTemplate, TTool>,
+		setTurnState: (turnState: TurnState<TSkill, TPromptTemplate, TTool>) => void,
 	): AgentLoopParams {
 		const turnState = getTurnState();
 		return {
@@ -329,10 +283,10 @@ export class AgentHarness<
 			reasoning: turnState.thinkingLevel === "off" ? undefined : turnState.thinkingLevel,
 			prepareNextTurn: async () => {
 				await this.flushPendingSessionWrites();
-				const nextTurnState = await this.createTurnState();
+				const nextTurnState = await this.buildTurnStateFromConfig();
 				setTurnState(nextTurnState);
 				return {
-					context: this.createContext(nextTurnState),
+					context: buildContext(nextTurnState),
 					model: nextTurnState.model,
 					thinkingLevel: nextTurnState.thinkingLevel,
 				};
@@ -343,7 +297,7 @@ export class AgentHarness<
 	}
 
 	private async executeTurn(
-		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
+		turnState: TurnState<TSkill, TPromptTemplate, TTool>,
 		text: string,
 		options?: { images?: ImageContent[] },
 	): Promise<AssistantMessage> {
@@ -370,7 +324,7 @@ export class AgentHarness<
 
 		const abortController = new AbortController();
 		const getTurnState = () => activeTurnState;
-		const setTurnState = (nextTurnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => {
+		const setTurnState = (nextTurnState: TurnState<TSkill, TPromptTemplate, TTool>) => {
 			activeTurnState = nextTurnState;
 		};
 		this.runAbortController = abortController;
@@ -378,7 +332,7 @@ export class AgentHarness<
 			try {
 				return await runAgentLoop(
 					messages,
-					this.createContext(turnState, beforeResult?.systemPrompt),
+					buildContext(turnState, beforeResult?.systemPrompt),
 					this.createLoopParams(getTurnState, setTurnState),
 					(event) => this.handleAgentEvent(event, abortController.signal),
 					this.events.emitHook.bind(this.events),
@@ -436,7 +390,7 @@ export class AgentHarness<
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
 		try {
-			const turnState = await this.createTurnState();
+			const turnState = await this.buildTurnStateFromConfig();
 			return await this.executeTurn(turnState, text, options);
 		} catch (error) {
 			this.phase = "idle";
@@ -451,7 +405,7 @@ export class AgentHarness<
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
 		try {
-			const turnState = await this.createTurnState();
+			const turnState = await this.buildTurnStateFromConfig();
 			const skill = (turnState.resources.skills ?? []).find((candidate) => candidate.name === name);
 			if (!skill) throw new AgentHarnessError("invalid_argument", `Unknown skill: ${name}`);
 			return await this.executeTurn(turnState, formatSkillInvocation(skill, additionalInstructions));
@@ -468,7 +422,7 @@ export class AgentHarness<
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
 		try {
-			const turnState = await this.createTurnState();
+			const turnState = await this.buildTurnStateFromConfig();
 			const template = (turnState.resources.promptTemplates ?? []).find((candidate) => candidate.name === name);
 			if (!template) throw new AgentHarnessError("invalid_argument", `Unknown prompt template: ${name}`);
 			return await this.executeTurn(turnState, formatPromptTemplateInvocation(template, args));
