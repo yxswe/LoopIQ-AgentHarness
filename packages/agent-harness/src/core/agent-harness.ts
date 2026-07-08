@@ -28,9 +28,9 @@ import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
 import { formatSkillInvocation } from "../skills/skills.ts";
 import type {
 	AbortResult,
-	PendingSessionWrite,
 	Session,
 } from "../base/session-types.ts";
+import { SessionWriter } from "../session/session-writer.ts";
 import {
 	AgentHarnessError,
 	normalizeHarnessError,
@@ -57,6 +57,7 @@ export class AgentHarness<
 > {
 	readonly env: ExecutionEnv;
 	private session: Session;
+	private sessionWriter!: SessionWriter;
 	readonly models: Models;
 	private resources: AgentHarnessResources<TSkill, TPromptTemplate>;
 	private streamOptions: AgentHarnessStreamOptions;
@@ -71,7 +72,6 @@ export class AgentHarness<
 	private phase: AgentHarnessPhase = "idle";
 	private runAbortController?: AbortController;
 	private runPromise?: Promise<void>;
-	private pendingSessionWrites: PendingSessionWrite[] = [];
 	private steerQueue: UserMessage[] = [];
 	private followUpQueue: UserMessage[] = [];
 	private nextTurnQueue: AgentMessage[] = [];
@@ -80,6 +80,7 @@ export class AgentHarness<
 	constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
 		this.env = options.env;
 		this.session = options.session;
+		this.sessionWriter = new SessionWriter(this.session);
 		this.models = options.models;
 		this.resources = options.resources ?? {};
 		this.streamOptions = cloneStreamOptions(options.streamOptions);
@@ -126,32 +127,6 @@ export class AgentHarness<
 			streamOptions: this.streamOptions,
 			systemPrompt: this.systemPrompt,
 		});
-	}
-
-	private async flushPendingSessionWrites(): Promise<void> {
-		while (this.pendingSessionWrites.length > 0) {
-			const write = this.pendingSessionWrites[0]!;
-			if (write.type === "message") {
-				await this.session.appendMessage(write.message);
-			} else if (write.type === "model_change") {
-				await this.session.appendModelChange(write.provider, write.modelId);
-			} else if (write.type === "thinking_level_change") {
-				await this.session.appendThinkingLevelChange(write.thinkingLevel);
-			} else if (write.type === "active_tools_change") {
-				await this.session.appendActiveToolsChange(write.activeToolNames);
-			} else if (write.type === "custom") {
-				await this.session.appendCustomEntry(write.customType, write.data);
-			} else if (write.type === "custom_message") {
-				await this.session.appendCustomMessageEntry(write.customType, write.content, write.display, write.details);
-			} else if (write.type === "label") {
-				await this.session.appendLabel(write.targetId, write.label);
-			} else if (write.type === "session_info") {
-				await this.session.appendSessionName(write.name ?? "");
-			} else if (write.type === "leaf") {
-				await this.session.getStorage().setLeafId(write.targetId);
-			}
-			this.pendingSessionWrites.shift();
-		}
 	}
 
 	private async emitBeforeProviderRequest(
@@ -202,14 +177,14 @@ export class AgentHarness<
 			} catch (error) {
 				eventError = error;
 			}
-			const hadPendingMutations = this.pendingSessionWrites.length > 0;
-			await this.flushPendingSessionWrites();
+			const hadPendingMutations = this.sessionWriter.hasPending();
+			await this.sessionWriter.flush();
 			if (eventError) throw eventError;
 			await this.events.emit({ type: "save_point", hadPendingMutations });
 			return;
 		}
 		if (event.type === "agent_end") {
-			await this.flushPendingSessionWrites();
+			await this.sessionWriter.flush();
 			this.phase = "idle";
 			await this.events.emit(event, signal);
 			await this.events.emit({ type: "settled", nextTurnCount: this.nextTurnQueue.length }, signal);
@@ -282,7 +257,7 @@ export class AgentHarness<
 			model: turnState.model,
 			reasoning: turnState.thinkingLevel === "off" ? undefined : turnState.thinkingLevel,
 			prepareNextTurn: async () => {
-				await this.flushPendingSessionWrites();
+				await this.sessionWriter.flush();
 				const nextTurnState = await this.buildTurnStateFromConfig();
 				setTurnState(nextTurnState);
 				return {
@@ -367,7 +342,7 @@ export class AgentHarness<
 			throw new AgentHarnessError("invalid_state", "AgentHarness prompt completed without an assistant message");
 		} finally {
 			try {
-				await this.flushPendingSessionWrites();
+				await this.sessionWriter.flush();
 			} finally {
 				this.runAbortController = undefined;
 			}
@@ -461,7 +436,7 @@ export class AgentHarness<
 			if (this.phase === "idle") {
 				await this.session.appendModelChange(model.provider, model.id);
 			} else {
-				this.pendingSessionWrites.push({ type: "model_change", provider: model.provider, modelId: model.id });
+				this.sessionWriter.enqueue({ type: "model_change", provider: model.provider, modelId: model.id });
 			}
 			this.model = model;
 			await this.events.emit({ type: "model_update", model, previousModel, source: "set" });
@@ -480,7 +455,7 @@ export class AgentHarness<
 			if (this.phase === "idle") {
 				await this.session.appendThinkingLevelChange(level);
 			} else {
-				this.pendingSessionWrites.push({ type: "thinking_level_change", thinkingLevel: level });
+				this.sessionWriter.enqueue({ type: "thinking_level_change", thinkingLevel: level });
 			}
 			this.thinkingLevel = level;
 			await this.events.emit({ type: "thinking_level_update", level, previousLevel });
