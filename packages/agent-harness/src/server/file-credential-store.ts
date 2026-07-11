@@ -4,15 +4,27 @@ import type { Credential, CredentialStore } from "@loopiq/ai";
 
 /**
  * File-backed CredentialStore. Persists a { [providerId]: Credential } map as
- * JSON. Writes are serialized per-provider through an in-process promise chain
- * so refresh/login writes do not race. Single-process only (dev tool).
+ * JSON. Every write persists the whole file, so all writes (modify + delete,
+ * across all providers) are serialized through a single in-process promise
+ * chain to avoid lost updates. Single-process only (dev tool).
  */
 export class FileCredentialStore implements CredentialStore {
 	private readonly filePath: string;
-	private chains = new Map<string, Promise<unknown>>();
+	private chain: Promise<unknown> = Promise.resolve();
 
 	constructor(filePath: string) {
 		this.filePath = filePath;
+	}
+
+	/** Serialize all writes through one global chain. */
+	private enqueue<T>(task: () => Promise<T>): Promise<T> {
+		const previous = this.chain;
+		const next = (async () => {
+			await previous.catch(() => {});
+			return task();
+		})();
+		this.chain = next.catch(() => {});
+		return next;
 	}
 
 	private async load(): Promise<Record<string, Credential>> {
@@ -39,8 +51,7 @@ export class FileCredentialStore implements CredentialStore {
 		providerId: string,
 		fn: (current: Credential | undefined) => Promise<Credential | undefined>,
 	): Promise<Credential | undefined> {
-		const previous = this.chains.get(providerId) ?? Promise.resolve();
-		const run = previous.then(async () => {
+		return this.enqueue(async () => {
 			const map = await this.load();
 			const next = await fn(map[providerId]);
 			if (next !== undefined) {
@@ -49,31 +60,13 @@ export class FileCredentialStore implements CredentialStore {
 			}
 			return map[providerId];
 		});
-		// Keep the chain alive even if this run rejects, without unhandled rejection.
-		this.chains.set(
-			providerId,
-			run.then(
-				() => undefined,
-				() => undefined,
-			),
-		);
-		return run;
 	}
 
 	async delete(providerId: string): Promise<void> {
-		const previous = this.chains.get(providerId) ?? Promise.resolve();
-		const run = previous.then(async () => {
+		await this.enqueue(async () => {
 			const map = await this.load();
 			delete map[providerId];
 			await this.save(map);
 		});
-		this.chains.set(
-			providerId,
-			run.then(
-				() => undefined,
-				() => undefined,
-			),
-		);
-		await run;
 	}
 }

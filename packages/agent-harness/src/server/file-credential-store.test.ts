@@ -62,4 +62,22 @@ describe("FileCredentialStore", () => {
 		await store.delete("github-copilot");
 		expect(await store.read("github-copilot")).toBeUndefined();
 	});
+
+	it("serializes concurrent writes across different providers", async () => {
+		const store = new FileCredentialStore(filePath);
+		const other: Credential = {
+			type: "oauth",
+			access: "other-access",
+			refresh: "other-refresh",
+			expires: 0,
+		} as Credential;
+		// Start both without awaiting the first; a per-provider chain would let
+		// one whole-file write clobber the other.
+		await Promise.all([
+			store.modify("github-copilot", async () => oauth),
+			store.modify("anthropic", async () => other),
+		]);
+		expect(await store.read("github-copilot")).toEqual(oauth);
+		expect(await store.read("anthropic")).toEqual(other);
+	});
 });
