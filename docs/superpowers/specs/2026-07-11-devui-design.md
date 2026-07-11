@@ -6,15 +6,24 @@ Status: Approved
 ## Goal
 
 Provide a local developer UI (`devui`) to manually test an `AgentHarness`
-instance. On process startup the server builds a single default harness
-instance, authenticates with GitHub Copilot, and serves a browser UI that can
-send prompts and observe the harness event trace in real time.
+instance. A Bun-based backend server (in `packages/agent-harness/server/`)
+builds a single default harness instance on startup, authenticates with GitHub
+Copilot, and exposes an HTTP + SSE API. A separate frontend package
+(`packages/devui`) provides the browser UI to send prompts and observe the
+harness event trace in real time.
 
 ## Scope
 
-- New private workspace package `packages/devui`.
-- Only the devui process runs on Bun. The rest of the monorepo keeps npm /
-  vitest / tsgo unchanged. The root `build` script is not modified.
+- Front-end / back-end separation:
+  - Back end lives in `packages/agent-harness/server/` — a standalone
+    directory that will grow into the real backend server entry. It holds the
+    HTTP server, harness factory, Copilot auth, and file credential store.
+  - Front end is a new private workspace package `packages/devui` holding only
+    static UI assets (HTML/JS). No backend logic.
+- Only the backend server process runs on Bun. The rest of the monorepo keeps
+  npm / vitest / tsgo unchanged. The root `build` script is not modified, and
+  the `server/` directory is excluded from the library's tsgo build/dist so it
+  does not pollute the `@loopiq/agent-core` published exports.
 - Single harness instance, single session. No multi-session switching.
 - The default instance ships with no tools. Tools are added later by the user.
 - Session is persisted to disk via the existing `JsonlSessionStorage`.
@@ -30,38 +39,56 @@ send prompts and observe the harness event trace in real time.
 
 ## Package Layout
 
+Back end (in the existing `@loopiq/agent-core` package, but outside `src/`):
+
 ```
-packages/devui/
-  package.json              # private package, scripts run via bun
-  tsconfig.json             # extends repo base (optional, for editor typing)
-  src/
-    server.ts               # Bun HTTP entry; builds harness on startup
-    harness-factory.ts      # assembles env / models / session / harness
-    copilot-auth.ts         # ensure Copilot credential (device-code login)
-    file-credential-store.ts# file-backed CredentialStore implementation
-  public/
-    index.html              # chat + event-trace UI, vanilla JS, no build step
-  .data/                    # gitignored: credentials.json, session.jsonl
+packages/agent-harness/
+  server/                     # standalone backend, run by bun, NOT in tsgo dist
+    server.ts                 # Bun HTTP entry; builds harness on startup
+    harness-factory.ts        # assembles env / models / session / harness
+    copilot-auth.ts           # ensure Copilot credential (device-code login)
+    file-credential-store.ts  # file-backed CredentialStore implementation
+    .data/                    # gitignored: credentials.json, session.jsonl
 ```
 
-Root `package.json` gains a `devui` script that forwards to the package
-(`bun run --cwd packages/devui src/server.ts` or a package-local `dev` script).
-`packages/devui` is added to the existing `workspaces` glob (`packages/*`) so it
-resolves `@loopiq/agent-core` and `@loopiq/ai`.
+Front end (new package):
+
+```
+packages/devui/
+  package.json                # private package, frontend only
+  public/
+    index.html                # chat + event-trace UI, vanilla JS, no build step
+    app.js                    # (optional split) UI logic
+```
+
+The backend's `Bun.serve` serves both the API and the static frontend files
+from `packages/devui/public` (resolved via a `DEVUI_STATIC_DIR`, default the
+sibling devui package). This keeps the code separated by concern (frontend
+authored in `packages/devui`, backend in `agent-harness/server`) while running a
+single process for easy testing. CORS is enabled so the frontend can later be
+hosted by its own dev server against the same API.
+
+`packages/agent-harness/package.json` gains a `server` script:
+`"server": "bun run server/server.ts"`. Root `package.json` gains a `devui`
+script forwarding to it (`npm run server -w @loopiq/agent-core` or equivalent).
+`packages/devui` is added to the existing `workspaces` glob (`packages/*`).
+The `server/` directory and its `.data/` are excluded via `tsconfig.build.json`
+and `.gitignore` respectively.
 
 ## Runtime: Bun
 
-- `packages/devui/package.json` scripts use Bun directly, e.g.
-  `"dev": "bun run src/server.ts"`. Bun runs TypeScript natively, so no tsx /
-  tsgo build step is needed for devui.
+- The backend runs on Bun directly: `bun run server/server.ts`. Bun runs
+  TypeScript natively, so no tsx / tsgo build step is needed for the server.
 - HTTP server uses `Bun.serve`.
-- No change to other packages' toolchain.
+- No change to other packages' toolchain; agent-harness library still builds
+  with tsgo (the `server/` dir is excluded from the build).
 
-## Startup Flow (`server.ts`)
+## Startup Flow (`server/server.ts`)
 
 Executed synchronously on process start, before serving:
 
-1. Resolve a data directory `packages/devui/.data/` (created if missing).
+1. Resolve a data directory `packages/agent-harness/server/.data/` (created if
+   missing).
 2. Build `FileCredentialStore` backed by `.data/credentials.json`.
 3. Ensure Copilot auth (`copilot-auth.ts`):
    - If `COPILOT_GITHUB_TOKEN` is set, rely on the provider's env-var api-key
@@ -76,8 +103,8 @@ Executed synchronously on process start, before serving:
    `models.getModel("github-copilot", modelId)` where `modelId` defaults to
    `claude-opus-4.6` and can be overridden with `DEVUI_MODEL`.
 5. Build `NodeExecutionEnv` with `cwd` = repo root (or `DEVUI_CWD`). Create
-   `JsonlSessionStorage.create(env.fs, ".data/session.jsonl")` (or `.open` if it
-   already exists) and wrap it in `new Session(storage)`.
+   `JsonlSessionStorage.create(env.fs, "server/.data/session.jsonl")` (or `.open`
+   if it already exists) and wrap it in `new Session(storage)`.
 6. `new AgentHarness({ env, session, models, model, systemPrompt, tools: [] })`.
    `systemPrompt` is a simple default string.
 7. Start `Bun.serve` on a configurable port (`DEVUI_PORT`, default e.g. 4100).
@@ -101,7 +128,7 @@ Implements the `CredentialStore` interface from `@loopiq/ai`:
 - `delete(providerId)` — remove the entry and rewrite the file.
 
 Credentials are stored as the `Credential` union (`type: "oauth"` for Copilot).
-The file lives under `.data/` and is gitignored.
+The file lives under `server/.data/` and is gitignored.
 
 ### copilot-auth.ts
 
@@ -124,7 +151,8 @@ The file lives under `.data/` and is gitignored.
 
 Routes:
 
-- `GET /` -> serve `public/index.html`.
+- `GET /` (and other static paths) -> serve the frontend from
+  `packages/devui/public` (`DEVUI_STATIC_DIR`).
 - `GET /api/events` -> SSE stream. On connect, call `harness.subscribe(listener)`;
   for each harness event, write an SSE frame `data: <JSON.stringify(event)>\n\n`.
   Unsubscribe on connection close.
@@ -133,10 +161,11 @@ Routes:
   assistant output and all lifecycle events flow back over the SSE stream.
 - `POST /api/abort` -> `harness.abort()`, return the abort result summary.
 
-Single global harness; a single SSE subscriber is expected but multiple
-connections are allowed (each gets its own subscription).
+CORS headers are enabled on `/api/*` so the frontend can also be served from a
+separate origin later. Single global harness; a single SSE subscriber is
+expected but multiple connections are allowed (each gets its own subscription).
 
-### public/index.html (frontend)
+### packages/devui frontend (`public/index.html`)
 
 Vanilla JS, no bundler:
 
@@ -173,18 +202,20 @@ harness --events--> harness.subscribe(listener) --SSE--> browser
 - `DEVUI_PORT` (default 4100)
 - `DEVUI_MODEL` (default `claude-opus-4.6`)
 - `DEVUI_CWD` (default repo root) — harness `NodeExecutionEnv` working dir
+- `DEVUI_STATIC_DIR` (default sibling `packages/devui/public`) — frontend assets
 - `COPILOT_GITHUB_TOKEN` (optional) — bypass device login
 
 ## Testing / Verification
 
 Manual verification (this is a dev tool):
 
-1. `bun run` the devui; complete Copilot device login on first run.
+1. `bun run server/server.ts` (or `npm run devui`); complete Copilot device
+   login on first run.
 2. Open the browser UI; send a prompt; confirm streaming assistant text.
 3. Confirm the trace panel shows lifecycle events (before_agent_start,
    context, tool/text events, save_point, settled).
 4. Restart the process; confirm no re-login is required (credential persisted)
-   and the prior session transcript is loaded from `.data/session.jsonl`.
+   and the prior session transcript is loaded from `server/.data/session.jsonl`.
 
 ## Open Questions / To Confirm During Planning
 
