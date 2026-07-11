@@ -108,6 +108,12 @@ Bun.serve({
 
 		return serveStatic(url.pathname);
 	},
+	error(err) {
+		return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), {
+			status: 500,
+			headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+		});
+	},
 });
 
 console.log(`[devui] server on http://localhost:${PORT} (model: ${modelId})`);
