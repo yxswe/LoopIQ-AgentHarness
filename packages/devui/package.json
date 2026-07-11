@@ -1,0 +1,7 @@
+{
+	"name": "@loopiq/devui",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Frontend-only developer UI for testing an AgentHarness instance",
+	"type": "module"
+}

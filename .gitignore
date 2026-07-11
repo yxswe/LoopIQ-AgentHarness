@@ -11,3 +11,4 @@ packages/*/dist/
 .claude/
 coverage/
 .nyc_output/
+packages/agent-harness/.data/
