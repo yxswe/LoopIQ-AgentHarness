@@ -4,9 +4,10 @@ import { createDefaultHarness } from "./harness-factory.ts";
 
 const PORT = Number(process.env.DEVUI_PORT ?? 4100);
 const MODEL_ID = process.env.DEVUI_MODEL ?? "claude-opus-4.6";
-const CWD = process.env.DEVUI_CWD ?? resolve(import.meta.dir, "../../../..");
-const DATA_DIR = resolve(import.meta.dir, "../../.data");
-const STATIC_DIR = process.env.DEVUI_STATIC_DIR ?? resolve(import.meta.dir, "../../../devui/public");
+// import.meta.dir = packages/server/src
+const CWD = process.env.DEVUI_CWD ?? resolve(import.meta.dir, "../../..");
+const DATA_DIR = resolve(import.meta.dir, "../.data");
+const STATIC_DIR = process.env.DEVUI_STATIC_DIR ?? resolve(import.meta.dir, "../../devui/public");
 
 const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",

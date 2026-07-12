@@ -1,11 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import type { AgentHarness } from "@loopiq/agent-core";
+import { createNodeHarness } from "@loopiq/agent-core/node";
 import { createModels } from "@loopiq/ai";
 import { githubCopilotProvider } from "@loopiq/ai/providers/github-copilot";
-import { AgentHarness } from "../core/agent-harness.ts";
-import { NodeExecutionEnv } from "../env/nodejs.ts";
-import { JsonlSessionStorage } from "../session/jsonl-storage.ts";
-import { Session } from "../session/session.ts";
 import { ensureCopilotCredential } from "./copilot-auth.ts";
 import { FileCredentialStore } from "./file-credential-store.ts";
 
@@ -45,14 +42,9 @@ export async function createDefaultHarness(options: CreateDevHarnessOptions): Pr
 		);
 	}
 
-	const env = new NodeExecutionEnv({ cwd: options.cwd });
-	const sessionPath = join(options.dataDir, "session.jsonl");
-	const storage = await openOrCreateSessionStorage(env, sessionPath, options.cwd);
-	const session = new Session(storage);
-
-	const harness = new AgentHarness({
-		env,
-		session,
+	const harness = await createNodeHarness({
+		cwd: options.cwd,
+		sessionPath: join(options.dataDir, "session.jsonl"),
 		models,
 		model,
 		systemPrompt: "You are a helpful assistant running inside the AgentHarness devui.",
@@ -60,16 +52,4 @@ export async function createDefaultHarness(options: CreateDevHarnessOptions): Pr
 	});
 
 	return { harness, modelId: model.id };
-}
-
-async function openOrCreateSessionStorage(
-	env: NodeExecutionEnv,
-	sessionPath: string,
-	cwd: string,
-): Promise<JsonlSessionStorage> {
-	const existing = await env.readTextFile(sessionPath);
-	if (existing.ok) {
-		return JsonlSessionStorage.open(env, sessionPath);
-	}
-	return JsonlSessionStorage.create(env, sessionPath, { cwd, sessionId: randomUUID() });
 }
