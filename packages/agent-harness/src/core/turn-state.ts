@@ -1,12 +1,7 @@
 import type { Model } from "@loopiq/ai";
 import type { ExecutionEnv } from "../base/env.ts";
 import type { AgentMessage } from "../base/messages.ts";
-import type {
-	AgentContext,
-	AgentHarnessOptions,
-	AgentHarnessStreamOptions,
-	ThinkingLevel,
-} from "../base/options.ts";
+import type { AgentContext, AgentHarnessOptions, AgentHarnessStreamOptions, ThinkingLevel } from "../base/options.ts";
 import type { AgentHarnessResources, AgentTool, PromptTemplate, Skill } from "../base/resource.ts";
 import type { Session } from "../base/session-types.ts";
 import { cloneStreamOptions } from "./stream-options.ts";
@@ -74,10 +69,7 @@ export async function buildTurnState<
 	};
 }
 
-export function buildContext(
-	turnState: TurnState,
-	systemPromptOverride?: string,
-): AgentContext {
+export function buildContext(turnState: TurnState, systemPromptOverride?: string): AgentContext {
 	return {
 		systemPrompt: systemPromptOverride ?? turnState.systemPrompt,
 		messages: turnState.messages.slice(),

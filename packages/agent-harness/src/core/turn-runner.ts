@@ -7,14 +7,13 @@ import type { AgentContext, AgentHarnessStreamOptions, QueueMode } from "../base
 import type { AgentTool, PromptTemplate, Skill } from "../base/resource.ts";
 import type { Session } from "../base/session-types.ts";
 import { AgentHarnessError, normalizeHookError, toError } from "../base/types.ts";
-
-import { AgentEventBus } from "./event-bus.ts";
+import type { MessageQueues } from "../queue/message-queues.ts";
+import type { SessionWriter } from "../session/session-writer.ts";
+import type { AgentEventBus } from "./event-bus.ts";
 import { createFailureMessage } from "./message-factory.ts";
 import { applyStreamOptionsPatch, cloneStreamOptions } from "./stream-options.ts";
 import { executeToolCalls } from "./tool-execution.ts";
 import { buildContext, type TurnState } from "./turn-state.ts";
-import { MessageQueues } from "../queue/message-queues.ts";
-import { SessionWriter } from "../session/session-writer.ts";
 
 export interface TurnRunnerDeps<
 	TSkill extends Skill = Skill,
@@ -149,8 +148,7 @@ export class TurnRunner<
 				this.activeTurnState = await this.deps.refreshTurnState();
 				currentContext = buildContext(this.activeTurnState);
 				model = this.activeTurnState.model;
-				reasoning =
-					this.activeTurnState.thinkingLevel === "off" ? undefined : this.activeTurnState.thinkingLevel;
+				reasoning = this.activeTurnState.thinkingLevel === "off" ? undefined : this.activeTurnState.thinkingLevel;
 
 				pendingMessages = await this.deps.queues.drainSteer(this.deps.steeringMode, this.deps.emitQueueUpdate);
 			}
@@ -331,11 +329,7 @@ export class TurnRunner<
 		await this.deps.events.emit(event, signal);
 	}
 
-	private async emitRunFailure(
-		model: Model<any>,
-		error: unknown,
-		aborted: boolean,
-	): Promise<AgentMessage[]> {
+	private async emitRunFailure(model: Model<any>, error: unknown, aborted: boolean): Promise<AgentMessage[]> {
 		const failureMessage = createFailureMessage(model, error, aborted);
 		await this.handleAgentEvent({ type: "message_start", message: failureMessage });
 		await this.handleAgentEvent({ type: "message_end", message: failureMessage });

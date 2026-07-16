@@ -1,9 +1,9 @@
 // Platform-agnostic public barrel for @loopiq/agent-core.
 //
-// Exports the AgentHarness class plus its outward-facing interfaces and types.
-// Internal implementation details (TurnRunner, SessionWriter, MessageQueues,
-// concrete storage/env classes) are intentionally NOT exported here; node-only
-// initialization lives in "./node.ts".
+// Exports the AgentHarness class plus its outward-facing interfaces and types,
+// the NodeExecutionEnv backend, and the built-in tool factories. Internal
+// implementation details (TurnRunner, SessionWriter, MessageQueues, concrete
+// storage classes) are intentionally NOT exported here.
 
 // Events (notification + hook)
 export type {
@@ -39,16 +39,41 @@ export type {
 	Skill,
 	ToolExecutionMode,
 } from "./base/resource.ts";
-// Session (public types only)
-export type {
-	AbortResult,
-	AgentHarnessPromptOptions,
-	Session,
-	SessionMetadata,
-	SessionTreeEntry,
-} from "./base/session-types.ts";
+// Session (public types only). The Session/Storage/tree structs are internal
+// implementation details and are intentionally not re-exported; callers only
+// touch sessions through the node factory (see "./node.ts").
+export type { AbortResult } from "./base/session-types.ts";
 export type { Result } from "./base/types.ts";
 
 // Error classes (exported as values for `instanceof` checks) and Result type
 export { AgentHarnessError, CompactionError, SessionError } from "./base/types.ts";
 export { AgentHarness } from "./core/agent-harness.ts";
+// Node execution environment (concrete backend used to build tools).
+export { NodeExecutionEnv } from "./env/nodejs.ts";
+// Built-in tools and the default tool-set factory.
+export {
+	type BashToolDetails,
+	type BashToolParams,
+	createBashTool,
+	createDefaultTools,
+	createEditTool,
+	createFileAccessTracker,
+	createGlobTool,
+	createGrepTool,
+	createListDirTool,
+	createReadTool,
+	createWriteTool,
+	type EditToolDetails,
+	type EditToolParams,
+	type FileAccessTracker,
+	type GlobToolDetails,
+	type GlobToolParams,
+	type GrepToolDetails,
+	type GrepToolParams,
+	type ListDirToolDetails,
+	type ListDirToolParams,
+	type ReadToolDetails,
+	type ReadToolParams,
+	type WriteToolDetails,
+	type WriteToolParams,
+} from "./tools/index.ts";

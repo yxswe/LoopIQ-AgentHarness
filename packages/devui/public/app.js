@@ -63,6 +63,14 @@ function handleEvent(event) {
 	const message = event.message;
 	const role = message?.role;
 
+	// User bubbles are driven by the event stream (single source of truth), so
+	// prompts submitted by any client -- the browser form or an external agent
+	// via the devui-control skill -- render identically here.
+	if (event.type === "message_start" && role === "user") {
+		addBubble("user", messageText(message));
+		return;
+	}
+
 	if (event.type === "message_start" && role === "assistant") {
 		assistantBubble = addBubble("assistant", "");
 		return;
@@ -97,8 +105,9 @@ form.addEventListener("submit", async (e) => {
 	e.preventDefault();
 	const text = input.value.trim();
 	if (!text) return;
-	addBubble("user", text);
 	input.value = "";
+	// The user bubble is rendered from the message_start(user) event (see
+	// handleEvent), not optimistically here, so browser and agent prompts match.
 	const res = await fetch("/api/prompt", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },

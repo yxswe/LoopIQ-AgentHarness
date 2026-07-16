@@ -1,5 +1,5 @@
 import type { FileSystem } from "../base/env.ts";
-import type { JsonlSessionMetadata, LeafEntry, SessionStorage, SessionTreeEntry } from "../base/session-types.ts";
+import type { JsonlSessionMetadata, SessionStorage, SessionTreeEntry } from "../base/session-types.ts";
 import { SessionError, toError } from "../base/types.ts";
 import { getFileSystemResultOrThrow } from "./repo-utils.ts";
 import { uuidv7 } from "./uuid.ts";
@@ -13,24 +13,6 @@ interface SessionHeader {
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
-}
-
-function updateLabelCache(labelsById: Map<string, string>, entry: SessionTreeEntry): void {
-	if (entry.type !== "label") return;
-	const label = entry.label?.trim();
-	if (label) {
-		labelsById.set(entry.targetId, label);
-	} else {
-		labelsById.delete(entry.targetId);
-	}
-}
-
-function buildLabelsById(entries: SessionTreeEntry[]): Map<string, string> {
-	const labelsById = new Map<string, string>();
-	for (const entry of entries) {
-		updateLabelCache(labelsById, entry);
-	}
-	return labelsById;
 }
 
 function generateEntryId(byId: { has(id: string): boolean }): string {
@@ -101,14 +83,7 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
 	if (typeof parsed.timestamp !== "string" || !parsed.timestamp) {
 		throw invalidEntry(filePath, lineNumber, "is missing timestamp");
 	}
-	if (parsed.type === "leaf" && parsed.targetId !== null && typeof parsed.targetId !== "string") {
-		throw invalidEntry(filePath, lineNumber, "has invalid targetId");
-	}
 	return parsed as unknown as SessionTreeEntry;
-}
-
-function leafIdAfterEntry(entry: SessionTreeEntry): string | null {
-	return entry.type === "leaf" ? entry.targetId : entry.id;
 }
 
 function headerToSessionMetadata(header: SessionHeader, path: string): JsonlSessionMetadata {
@@ -154,7 +129,7 @@ async function loadJsonlStorage(
 	for (let i = 1; i < lines.length; i++) {
 		const entry = parseEntryLine(lines[i]!, filePath, i + 1);
 		entries.push(entry);
-		leafId = leafIdAfterEntry(entry);
+		leafId = entry.id;
 	}
 	return { header, entries, leafId };
 }
@@ -165,7 +140,6 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 	private readonly metadata: JsonlSessionMetadata;
 	private entries: SessionTreeEntry[];
 	private byId: Map<string, SessionTreeEntry>;
-	private labelsById: Map<string, string>;
 	private currentLeafId: string | null;
 
 	private constructor(
@@ -180,7 +154,6 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		this.metadata = headerToSessionMetadata(header, this.filePath);
 		this.entries = entries;
 		this.byId = new Map(entries.map((entry) => [entry.id, entry]));
-		this.labelsById = buildLabelsById(entries);
 		this.currentLeafId = leafId;
 	}
 
@@ -224,26 +197,6 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		return this.currentLeafId;
 	}
 
-	async setLeafId(leafId: string | null): Promise<void> {
-		if (leafId !== null && !this.byId.has(leafId)) {
-			throw new SessionError("not_found", `Entry ${leafId} not found`);
-		}
-		const entry: LeafEntry = {
-			type: "leaf",
-			id: generateEntryId(this.byId),
-			parentId: this.currentLeafId,
-			timestamp: new Date().toISOString(),
-			targetId: leafId,
-		};
-		getFileSystemResultOrThrow(
-			await this.fs.appendFile(this.filePath, `${JSON.stringify(entry)}\n`),
-			`Failed to append session leaf ${entry.id}`,
-		);
-		this.entries.push(entry);
-		this.byId.set(entry.id, entry);
-		this.currentLeafId = leafId;
-	}
-
 	async createEntryId(): Promise<string> {
 		return generateEntryId(this.byId);
 	}
@@ -255,8 +208,7 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		);
 		this.entries.push(entry);
 		this.byId.set(entry.id, entry);
-		updateLabelCache(this.labelsById, entry);
-		this.currentLeafId = leafIdAfterEntry(entry);
+		this.currentLeafId = entry.id;
 	}
 
 	async getEntry(id: string): Promise<SessionTreeEntry | undefined> {
@@ -267,10 +219,6 @@ export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata>
 		type: TType,
 	): Promise<Array<Extract<SessionTreeEntry, { type: TType }>>> {
 		return this.entries.filter((entry): entry is Extract<SessionTreeEntry, { type: TType }> => entry.type === type);
-	}
-
-	async getLabel(id: string): Promise<string | undefined> {
-		return this.labelsById.get(id);
 	}
 
 	async getPathToRoot(leafId: string | null): Promise<SessionTreeEntry[]> {

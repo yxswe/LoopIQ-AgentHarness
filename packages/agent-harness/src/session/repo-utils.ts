@@ -1,10 +1,6 @@
 import type { FileError } from "../base/env.ts";
+import type { SessionMetadata, SessionStorage, SessionTreeEntry } from "../base/session-types.ts";
 import { type Result, SessionError } from "../base/types.ts";
-import type {
-	SessionMetadata,
-	SessionStorage,
-	SessionTreeEntry,
-} from "../base/session-types.ts";
 import { Session } from "./session.ts";
 import { uuidv7 } from "./uuid.ts";
 

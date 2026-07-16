@@ -14,7 +14,7 @@ implements a general-purpose AI agent runtime. It has four packages:
 - `@loopiq/agent-core` (`packages/agent-harness`) — the agent runtime: turn loop,
   session persistence, context compaction, tools, events. A pure library.
 - `@loopiq/server` (`packages/server`) — a Bun HTTP server (DevUI backend) that
-  instantiates a harness via `createNodeHarness` and exposes it over SSE + REST.
+  instantiates a harness via `AgentHarness.create` and exposes it over SSE + REST.
 - `@loopiq/devui` — a minimal web UI (static assets) for exercising the server.
 
 Dependency direction:
@@ -56,34 +56,39 @@ thinking levels (off → xhigh), and image models.
 
 The core runtime, published as a pure library. Subsystems below.
 
-### Public API surface (`src/index.ts`, `src/node.ts`)
+### Public API surface (`src/index.ts`)
 
-Two barrels, matching the package's `.` and `./node` exports:
+A single barrel, matching the package's sole `.` export:
 
-- `src/index.ts` — platform-agnostic barrel. Exports the `AgentHarness` class
-  plus its outward-facing interfaces/types (options, resources, messages,
-  events, public session types, error classes, `Result`). Internal
-  implementation (TurnRunner, SessionWriter, MessageQueues, concrete
-  storage/env classes) is intentionally not exported.
-- `src/node.ts` — node barrel. Re-exports `./index.ts` and adds
-  `createNodeHarness(options: NodeHarnessOptions)`, the node initialization
-  entry point. It assembles the node-only `NodeExecutionEnv` and JSONL
-  `Session` (open-or-create) internally so callers pass only `cwd`,
-  `sessionPath`, and harness config (`models`, `model`, `systemPrompt`,
-  `tools`, ...) and never touch `NodeExecutionEnv` / `JsonlSessionStorage` /
-  `Session` directly.
+- `src/index.ts` — exports the `AgentHarness` class plus its outward-facing
+  interfaces/types (options, resources, messages, events, `AbortResult`, error
+  classes, `Result`). Also exports `NodeExecutionEnv` and the built-in tool
+  factories (`createReadTool`, ... `createListDirTool`, and the aggregate
+  `createDefaultTools`) so callers can construct the default tool set against an
+  env. The `Session` / storage / session-tree structs are internal and
+  intentionally not exported.
 
-The `AgentHarness` constructor is unchanged and still accepts a low-level
-`env`/`session`; `createNodeHarness` is the assembly layer over it.
+`AgentHarness` is Node-runtime-based by default. Construction goes through the
+static async factory `AgentHarness.create(options)`: the caller passes only
+`cwd`, `sessionPath`, and harness config (`models`, `model`, `systemPrompt`,
+`tools`, ...); the factory assembles the node-only `NodeExecutionEnv` and JSONL
+`Session` (open-or-create) internally. Tools are supplied by the caller and are
+bound to their own `NodeExecutionEnv` (built from the same `cwd`); the harness
+does not inject its internal env into tool factories. The constructor is private
+(session assembly is asynchronous).
 
 ### Core loop (`src/core/`)
 
 - `agent-harness.ts` — `AgentHarness`, the main orchestrator. Holds `session`,
   `model`, `tools`/`activeToolNames`, `thinkingLevel`, `streamOptions`, message
   `queues`, `events` bus, and `phase` (idle | turn | compaction | retry). Public
-  API: `prompt()`, `skill()`, `promptFromTemplate()`, `steer()`, `followUp()`,
-  `nextTurn()`, runtime setters, `abort()`, `waitForIdle()`, `subscribe()`,
-  `on()`.
+  API is deliberately minimal: `send()` (single input entry — routes by phase:
+  idle → new turn, busy → steer the running turn), `getModel()`/`setModel()`,
+  `getThinkingLevel()`/`setThinkingLevel()`, `abort()`, and — kept public only
+  transitionally, slated to become private — `subscribe()`/`on()`. The turn
+  primitives (`prompt`/`steer`/`followUp`/`nextTurn`), explicit resource
+  invocation (`skill`/`promptFromTemplate`), and `waitForIdle`/`getResources`
+  are private internals behind `send()`.
 - `turn-runner.ts` — `TurnRunner`, a short-lived executor for a single turn.
   Drives: agent_start → turn_start → process messages → LLM call → tool
   execution → compaction (if needed). Drains steer/follow-up queues at defined
@@ -98,6 +103,44 @@ The `AgentHarness` constructor is unchanged and still accepts a low-level
 `message-queues.ts` — three-tier queueing: `steerQueue` (mid-turn injection),
 `followUpQueue` (after current turn), `nextTurnQueue` (start of next turn). Drain
 modes: `one-at-a-time` or `all`.
+
+### Built-in tools (`src/tools/`)
+
+Filesystem/shell tools implementing `AgentTool`, each created via a
+`createXTool(env)` factory bound to an `ExecutionEnv` (so all IO flows through the
+`Result`-based env abstraction, never throwing at the boundary). Read/Write/Edit
+additionally accept an optional shared `FileAccessTracker` enforcing read-before-write.
+Failures are surfaced by throwing inside `execute`, which `tool-execution.ts` wraps
+into an error tool result.
+
+- `read.ts` — `Read`, numbered-line file reads with `offset`/`limit`, a default
+  line cap and a byte-size guard (large files require an explicit `offset`/`limit`),
+  plus inline image support (png/jpg/gif/webp returned as base64 `ImageContent`).
+- `write.ts` — `Write`, create/overwrite/`append` a file (reports `created`,
+  `appended`, `bytesWritten`). When wired with a `FileAccessTracker`, overwriting
+  an existing file requires it to have been read first.
+- `edit.ts` — `Edit`, exact string replacement with unique-match guard and
+  `replace_all`, plus a multi-edit `edits` array applied atomically in one write.
+  Honors the same read-before-edit guard via the tracker.
+- `bash.ts` — `Bash`, streamed shell execution via `executeShellWithCapture`
+  (timeout, abort, output truncation spilling to disk), separated `STDERR:`
+  section, optional `description`, and `run_in_background` (detached, streaming to
+  a log file read back later).
+- `grep.ts` — `Grep`, pure-Node recursive regex search (`content` /
+  `files_with_matches` / `count` modes, basename glob filter, language `type`
+  filter, `-A`/`-B`/`-C` context, `multiline` matching, `offset`, `head_limit`).
+- `glob.ts` — `Glob`, pattern file matching (`**`, `*`, `?`, `{a,b}` brace
+  expansion) sorted by mtime, with `max_depth` and `absolute` path output.
+- `list-dir.ts` — `ListDir`, direct or recursive directory listing (directories
+  marked with a trailing `/`).
+- `index.ts` — tools barrel; `createDefaultTools(env)` returns the seven tools
+  above as the default set, wiring a shared `FileAccessTracker` into Read/Write/Edit.
+  Shared helpers live in `utils/` (`truncate.ts`, `shell-output.ts`,
+  `file-access-tracker.ts`).
+
+Each tool ships a co-located `*.test.ts`; `index.test.ts` covers the default-set
+wiring with an end-to-end write/read/edit/search/list/exec round trip.
+
 
 ### Session & persistence (`src/session/`)
 
@@ -142,17 +185,18 @@ hook lets apps override or augment compaction.
 
 `@loopiq/server` (`packages/server`) is the DevUI backend: a Bun HTTP server that
 owns a single harness instance and exposes it over SSE + REST. It depends only on
-the `@loopiq/agent-core` public API (`@loopiq/agent-core/node`) and `@loopiq/ai`.
+the `@loopiq/agent-core` public API and `@loopiq/ai`.
 
 - `server.ts` — Bun HTTP server (port via `DEVUI_PORT`, default 4100).
   Builds one harness via `createDefaultHarness()`. Endpoints: `GET /api/events`
   (SSE broadcast of all harness notification events), `POST /api/prompt`
-  (`{text}`, enqueues `prompt()`, 202), `POST /api/abort` (calls `abort()`),
+  (`{text}`, enqueues `send()`, 202), `POST /api/abort` (calls `abort()`),
   `GET /` (serves `packages/devui/public`; override via `DEVUI_STATIC_DIR`).
   Data dir defaults to `packages/server/.data`. CORS enabled.
 - `harness-factory.ts` — `createDefaultHarness()`. Resolves a GitHub Copilot
   credential, builds `Models`, selects the requested model, then delegates
-  env/session assembly to `createNodeHarness()` from `@loopiq/agent-core/node`.
+  env/session assembly to `AgentHarness.create()` from `@loopiq/agent-core`. Wires
+  the default built-in tool set via `createDefaultTools(new NodeExecutionEnv(...))`.
 - `copilot-auth.ts` — `ensureCopilotCredential()`: reuse `COPILOT_GITHUB_TOKEN`,
   a stored credential, or run the GitHub Copilot device-code login flow.
 - `file-credential-store.ts` — `FileCredentialStore`, a single-process
@@ -162,11 +206,30 @@ the `@loopiq/agent-core` public API (`@loopiq/agent-core/node`) and `@loopiq/ai`
 
 Private, framework-free frontend. `public/index.html` + `public/app.js` connect to
 the `/api/events` SSE stream, submit prompts to `/api/prompt`, and render chat
-bubbles plus an event trace for debugging.
+bubbles plus an event trace for debugging. Chat bubbles (both user and assistant)
+are driven entirely by the SSE event stream — user bubbles come from
+`message_start` events with `role: "user"` rather than optimistic local inserts —
+so prompts submitted by any client (the browser form or an external agent) render
+identically.
+
+## Agent control skill: `.claude/skills/devui-control`
+
+A repo-local Claude Code skill that lets another agent drive the running devui
+server the same way a human uses the browser UI, over the existing HTTP/SSE
+surface (zero server changes). It drives and observes the *same* single shared
+harness/session, so its prompts also appear on the browser devui.
+
+- `client.mjs` — dependency-free client: an async-generator `events()` over the
+  `/api/events` SSE stream plus `post()` helpers.
+- `devctl.mjs` — CLI with `send` (submit a prompt, block until `agent_end`, print
+  the assistant's final reply), `abort` (POST `/api/abort`), and `watch` (stream
+  the live event/debug feed). Server URL via `DEVUI_URL` / `DEVUI_PORT`.
+- `SKILL.md` — usage for the agent. Limitations: single shared session (sends
+  interleave with the human) and no history replay (only events after connect).
 
 ## Data Flow
 
-1. Caller invokes `harness.prompt(text)`.
+1. Caller invokes `harness.send(text)` (idle → starts a turn; busy → steers).
 2. `AgentHarness` builds a `TurnState` and runs a `TurnRunner`.
 3. `TurnRunner` calls the `@loopiq/ai` model, streams output, and executes tool
    calls; steer/follow-up queues are drained at defined points.

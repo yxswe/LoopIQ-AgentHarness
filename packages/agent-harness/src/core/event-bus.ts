@@ -1,10 +1,6 @@
 import type { Model } from "@loopiq/ai";
 
-import type {
-	AgentHookEvent,
-	AgentHookEventResultMap,
-	AgentNotificationEvent,
-} from "../base/events.ts";
+import type { AgentHookEvent, AgentHookEventResultMap, AgentNotificationEvent } from "../base/events.ts";
 import type { PromptTemplate, Skill } from "../base/resource.ts";
 import { normalizeHookError } from "../base/types.ts";
 
@@ -21,10 +17,7 @@ type AgentHarnessHandler = (event: any, signal?: AbortSignal) => Promise<any> | 
  * - `on(type)` registers interceptable hooks under a concrete type; {@link emitHook}
  *   dispatches to them and returns the last non-undefined result.
  */
-export class AgentEventBus<
-	TSkill extends Skill = Skill,
-	TPromptTemplate extends PromptTemplate = PromptTemplate,
-> {
+export class AgentEventBus<TSkill extends Skill = Skill, TPromptTemplate extends PromptTemplate = PromptTemplate> {
 	private handlers = new Map<string, Set<AgentHarnessHandler>>();
 
 	getHandlers(type: string): Set<AgentHarnessHandler> | undefined {

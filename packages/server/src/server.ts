@@ -90,7 +90,8 @@ Bun.serve({
 			}
 			const text = body.text;
 			// Fire and forget: assistant output + lifecycle events flow over SSE.
-			harness.prompt(text).catch((error) => {
+			// `send` routes by phase: idle -> new turn, busy -> steer the running turn.
+			harness.send(text).catch((error) => {
 				broadcast({ type: "server_error", message: error instanceof Error ? error.message : String(error) });
 			});
 			return new Response(JSON.stringify({ status: "accepted" }), {

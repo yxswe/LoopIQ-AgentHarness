@@ -1,10 +1,12 @@
-import { ExecutionError } from "../../base/env.ts";
 import type { ExecutionEnv, ShellExecOptions } from "../../base/env.ts";
+import { ExecutionError } from "../../base/env.ts";
 import { err, ok, type Result, toError } from "../../base/types.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./truncate.ts";
 
 export interface ShellCaptureOptions extends Omit<ShellExecOptions, "onStdout" | "onStderr"> {
 	onChunk?: (chunk: string) => void;
+	/** When true, stderr is captured separately and returned in {@link ShellCaptureResult.stderr} instead of merged into output. */
+	separateStderr?: boolean;
 }
 
 export interface ShellCaptureResult {
@@ -13,6 +15,8 @@ export interface ShellCaptureResult {
 	cancelled: boolean;
 	truncated: boolean;
 	fullOutputPath?: string;
+	/** Captured stderr, present only when {@link ShellCaptureOptions.separateStderr} was set. */
+	stderr?: string;
 }
 
 function toExecutionError(error: unknown): ExecutionError {
@@ -96,11 +100,34 @@ export async function executeShellWithCapture(
 		}
 	};
 
+	const stderrChunks: string[] = [];
+	let stderrBytes = 0;
+	const onStderrChunk = (chunk: string) => {
+		try {
+			const text = sanitizeBinaryOutput(chunk).replace(/\r/g, "");
+			stderrChunks.push(text);
+			stderrBytes += text.length;
+			while (stderrBytes > maxOutputBytes && stderrChunks.length > 1) {
+				const removed = stderrChunks.shift()!;
+				stderrBytes -= removed.length;
+			}
+		} catch (error) {
+			captureError = toExecutionError(error);
+		}
+	};
+
+	const captureStderr = (): string | undefined => {
+		if (!options?.separateStderr) return undefined;
+		const joined = stderrChunks.join("");
+		const truncation = truncateTail(joined);
+		return truncation.truncated ? truncation.content : joined;
+	};
+
 	try {
 		const result = await env.exec(command, {
 			...(options ?? {}),
 			onStdout: onChunk,
-			onStderr: onChunk,
+			onStderr: options?.separateStderr ? onStderrChunk : onChunk,
 		});
 		const tailOutput = outputChunks.join("");
 		const truncationResult = truncateTail(tailOutput);
@@ -111,6 +138,8 @@ export async function executeShellWithCapture(
 		if (!writeResult.ok) return err(writeResult.error);
 		if (captureError) return err(captureError);
 
+		const stderr = captureStderr();
+
 		if (!result.ok) {
 			if (result.error.code === "aborted" || options?.abortSignal?.aborted) {
 				return ok({
@@ -119,6 +148,7 @@ export async function executeShellWithCapture(
 					cancelled: true,
 					truncated: truncationResult.truncated,
 					fullOutputPath,
+					stderr,
 				});
 			}
 			return err(result.error);
@@ -130,6 +160,7 @@ export async function executeShellWithCapture(
 			cancelled,
 			truncated: truncationResult.truncated,
 			fullOutputPath,
+			stderr,
 		});
 	} catch (error) {
 		return err(toExecutionError(error));

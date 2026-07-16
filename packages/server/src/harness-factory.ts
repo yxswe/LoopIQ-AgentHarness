@@ -1,6 +1,5 @@
 import { join } from "node:path";
-import type { AgentHarness } from "@loopiq/agent-core";
-import { createNodeHarness } from "@loopiq/agent-core/node";
+import { AgentHarness, createDefaultTools, NodeExecutionEnv } from "@loopiq/agent-core";
 import { createModels } from "@loopiq/ai";
 import { githubCopilotProvider } from "@loopiq/ai/providers/github-copilot";
 import { ensureCopilotCredential } from "./copilot-auth.ts";
@@ -42,13 +41,13 @@ export async function createDefaultHarness(options: CreateDevHarnessOptions): Pr
 		);
 	}
 
-	const harness = await createNodeHarness({
+	const harness = await AgentHarness.create({
 		cwd: options.cwd,
 		sessionPath: join(options.dataDir, "session.jsonl"),
 		models,
 		model,
 		systemPrompt: "You are a helpful assistant running inside the AgentHarness devui.",
-		tools: [],
+		tools: createDefaultTools(new NodeExecutionEnv({ cwd: options.cwd })),
 	});
 
 	return { harness, modelId: model.id };

@@ -16,8 +16,8 @@ import {
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { ExecutionError, FileError, type FileKind } from "../base/env.ts";
 import type { ExecutionEnv, FileInfo } from "../base/env.ts";
+import { ExecutionError, FileError, type FileKind } from "../base/env.ts";
 import { err, ok, type Result, toError } from "../base/types.ts";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;

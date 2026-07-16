@@ -1,20 +1,8 @@
-import type {
-	Message,
-	Model,
-	Models,
-	SimpleStreamOptions,
-	Transport,
-} from "@loopiq/ai";
-import type { AgentMessage } from "./messages.ts";
-import type {
-	AgentHarnessResources,
-	AgentTool,
-	PromptTemplate,
-	Skill,
-	ToolExecutionMode,
-} from "./resource.ts";
-import type { ExecutionEnv, FileOperations } from "./env.ts";
+import type { Message, Model, Models, SimpleStreamOptions, Transport } from "@loopiq/ai";
 import type { Session } from "../session/session.ts";
+import type { ExecutionEnv, FileOperations } from "./env.ts";
+import type { AgentMessage } from "./messages.ts";
+import type { AgentHarnessResources, AgentTool, PromptTemplate, Skill, ToolExecutionMode } from "./resource.ts";
 
 /**
  * Controls how many queued user messages are injected when the agent loop reaches a queue drain point.
@@ -23,8 +11,6 @@ import type { Session } from "../session/session.ts";
  * - "one-at-a-time": drain and inject only the oldest queued message, leaving the rest queued for later drain points.
  */
 export type QueueMode = "all" | "one-at-a-time";
-
-
 
 /** Curated provider request options owned by the harness and snapshotted per turn. */
 export interface AgentHarnessStreamOptions {
@@ -58,8 +44,10 @@ export interface AgentHarnessOptions<
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
 	TTool extends AgentTool = AgentTool,
 > {
-	env: ExecutionEnv;
-	session: Session;
+	/** Working directory for the (node) execution environment built internally. */
+	cwd: string;
+	/** Path to the JSONL session file. Opened if it exists, created otherwise. */
+	sessionPath: string;
 	/**
 	 * Provider collection used for all model requests (turn streaming,
 	 * compaction, branch summarization). Auth resolves through the providers'
@@ -69,7 +57,7 @@ export interface AgentHarnessOptions<
 	tools?: TTool[];
 	/**
 	 * Concrete resources available to explicit invocation methods and system-prompt callbacks.
-	 * Applications own loading/reloading resources and should call `setResources()` with new values.
+	 * Fixed at construction time; there is no runtime setter.
 	 */
 	resources?: AgentHarnessResources<TSkill, TPromptTemplate>;
 	systemPrompt?:
@@ -98,8 +86,6 @@ export interface AgentHarnessOptions<
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-
-
 /** Context snapshot passed into the low-level agent loop. */
 export interface AgentContext {
 	/** System prompt included with the request. */
@@ -109,6 +95,3 @@ export interface AgentContext {
 	/** Tools available for this run. */
 	tools?: AgentTool<any>[];
 }
-
-
-

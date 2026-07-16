@@ -79,7 +79,7 @@ Stream options are shallow-copied when a snapshot is created. `headers` and `met
 
 The session contains persisted entries only. Session reads return persisted state and do not include queued writes.
 
-Session storage implementations must persist leaf changes as `leaf` entries. `setLeafId()` is not an in-memory-only cursor update; it appends a durable entry whose `targetId` is the active tree leaf or `null` for root. Reopening storage must reconstruct the current leaf from the latest persisted leaf-affecting entry.
+Session storage tracks the active tree leaf as the last appended entry. Reopening storage reconstructs the current leaf from the final persisted entry; `getLeafId()` returns that entry's id (or `null` for an empty session).
 
 ### Pending session writes
 
@@ -306,8 +306,7 @@ Done:
 - Queue drains roll back if queue-update notification fails.
 - `message_end` persistence happens before subscriber notification.
 - `abort()` signals cancellation before notifications and still waits for idle through notification errors.
-- Idle model/thinking/tool updates validate and persist before committing in-memory state.
-- `setLeafId()` persists durable `leaf` entries so tree navigation survives storage reopen.
+- The active tree leaf is the last appended entry, so tree navigation survives storage reopen.
 
 Remaining:
 

@@ -1,14 +1,14 @@
 import type { AssistantMessage, ImageContent, Model, Models, TextContent, Usage } from "@loopiq/ai";
-import type { ThinkingLevel } from "../../base/options.ts";
 import {
 	type AgentMessage,
 	convertToLlm,
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "../../base/messages.ts";
-import { buildSessionContext } from "../../session/session.ts";
-import { CompactionError, err, ok, type Result } from "../../base/types.ts";
+import type { ThinkingLevel } from "../../base/options.ts";
 import type { CompactionEntry, SessionTreeEntry } from "../../base/session-types.ts";
+import { CompactionError, err, ok, type Result } from "../../base/types.ts";
+import { buildSessionContext } from "../../session/session.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -279,19 +279,12 @@ function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, end
 				}
 				break;
 			}
-			case "thinking_level_change":
-			case "model_change":
-			case "active_tools_change":
 			case "compaction":
-			case "branch_summary":
 			case "custom":
 			case "custom_message":
-			case "label":
-			case "session_info":
-			case "leaf":
 				break;
 		}
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
+		if (entry.type === "custom_message") {
 			cutPoints.push(i);
 		}
 	}
@@ -302,7 +295,7 @@ function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, end
 export function findTurnStartIndex(entries: SessionTreeEntry[], entryIndex: number, startIndex: number): number {
 	for (let i = entryIndex; i >= startIndex; i--) {
 		const entry = entries[i];
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
+		if (entry.type === "custom_message") {
 			return i;
 		}
 		if (entry.type === "message") {

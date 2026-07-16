@@ -1,48 +1,24 @@
 import type { ImageContent, TextContent } from "@loopiq/ai";
-import {
-	type AgentMessage,
-	createCompactionSummaryMessage,
-	createCustomMessage,
-} from "../base/messages.ts";
+import { type AgentMessage, createCompactionSummaryMessage, createCustomMessage } from "../base/messages.ts";
 import type {
-	ActiveToolsChangeEntry,
 	CompactionEntry,
 	CustomEntry,
 	CustomMessageEntry,
-	LabelEntry,
 	MessageEntry,
-	ModelChangeEntry,
-	SessionInfoEntry,
 	SessionMetadata,
 	SessionStorage,
 	SessionTreeEntry,
-	ThinkingLevelChangeEntry,
 } from "../base/session-types.ts";
-import { SessionError } from "../base/types.ts";
 
 export interface SessionContext {
 	messages: AgentMessage[];
-	thinkingLevel: string;
-	model: { provider: string; modelId: string } | null;
-	activeToolNames: string[] | null;
 }
 
 export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionContext {
-	let thinkingLevel = "off";
-	let model: { provider: string; modelId: string } | null = null;
-	let activeToolNames: string[] | null = null;
 	let compaction: CompactionEntry | null = null;
 
 	for (const entry of pathEntries) {
-		if (entry.type === "thinking_level_change") {
-			thinkingLevel = entry.thinkingLevel;
-		} else if (entry.type === "model_change") {
-			model = { provider: entry.provider, modelId: entry.modelId };
-		} else if (entry.type === "message" && entry.message.role === "assistant") {
-			model = { provider: entry.message.provider, modelId: entry.message.model };
-		} else if (entry.type === "active_tools_change") {
-			activeToolNames = [...entry.activeToolNames];
-		} else if (entry.type === "compaction") {
+		if (entry.type === "compaction") {
 			compaction = entry;
 		}
 	}
@@ -82,7 +58,7 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
 		}
 	}
 
-	return { messages, thinkingLevel, model, activeToolNames };
+	return { messages };
 }
 
 export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
@@ -121,15 +97,6 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return buildSessionContext(await this.getBranch());
 	}
 
-	getLabel(id: string): Promise<string | undefined> {
-		return this.storage.getLabel(id);
-	}
-
-	async getSessionName(): Promise<string | undefined> {
-		const entries = await this.storage.findEntries("session_info");
-		return entries[entries.length - 1]?.name?.trim() || undefined;
-	}
-
 	private async appendTypedEntry<TEntry extends SessionTreeEntry>(entry: TEntry): Promise<string> {
 		await this.storage.appendEntry(entry);
 		return entry.id;
@@ -143,37 +110,6 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 			timestamp: new Date().toISOString(),
 			message,
 		} satisfies MessageEntry);
-	}
-
-	async appendThinkingLevelChange(thinkingLevel: string): Promise<string> {
-		return this.appendTypedEntry({
-			type: "thinking_level_change",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			thinkingLevel,
-		} satisfies ThinkingLevelChangeEntry);
-	}
-
-	async appendModelChange(provider: string, modelId: string): Promise<string> {
-		return this.appendTypedEntry({
-			type: "model_change",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			provider,
-			modelId,
-		} satisfies ModelChangeEntry);
-	}
-
-	async appendActiveToolsChange(activeToolNames: string[]): Promise<string> {
-		return this.appendTypedEntry({
-			type: "active_tools_change",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			activeToolNames: [...activeToolNames],
-		} satisfies ActiveToolsChangeEntry);
 	}
 
 	async appendCompaction<T = unknown>(
@@ -223,30 +159,5 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 			display,
 			details,
 		} satisfies CustomMessageEntry<T>);
-	}
-
-	async appendLabel(targetId: string, label: string | undefined): Promise<string> {
-		if (!(await this.storage.getEntry(targetId))) {
-			throw new SessionError("not_found", `Entry ${targetId} not found`);
-		}
-		return this.appendTypedEntry({
-			type: "label",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			targetId,
-			label,
-		} satisfies LabelEntry);
-	}
-
-	async appendSessionName(name: string): Promise<string> {
-		const sanitizedName = name.replace(/[\r\n]+/g, " ").trim();
-		return this.appendTypedEntry({
-			type: "session_info",
-			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
-			timestamp: new Date().toISOString(),
-			name: sanitizedName,
-		} satisfies SessionInfoEntry);
 	}
 }
