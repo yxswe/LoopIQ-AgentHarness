@@ -24,3 +24,23 @@
 - All documentation MUST be written in English.
 - All pull request titles and descriptions MUST be written in English.
 - All commit messages MUST be written in English.
+
+# Agent Tooling
+
+## devui-control
+
+Drive the running devui AgentHarness server from the command line, the same way a
+human drives the browser devui. It talks to the single shared session, so anything
+you send also appears on the browser devui as a user message, and you observe the
+exact same event/debug stream a human sees.
+
+- **Hard dependency:** the devui server must be running. Start it from the repo
+  root with `npm run devui` (package `packages/server`). Every command is just an
+  HTTP/SSE client and does nothing on its own; if the server is down, commands
+  fail fast with a connection error and exit non-zero.
+- **Usage:** `node .github/agent-tools/devui-control/devctl.mjs <send|abort|watch> [args]`
+  - `send "<prompt>"` — submit a prompt and block until the turn settles, then
+    print the assistant's final reply.
+  - `abort` — stop the current turn (same as the devui Abort button).
+  - `watch` — stream the live event/debug feed until interrupted.
+- **Full documentation:** see `.github/agent-tools/devui-control/README.md`.

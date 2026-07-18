@@ -8,7 +8,8 @@ packages/*/dist/
 .env
 .vscode/
 .idea/
-.claude/
+.claude/settings.local.json
+.claude-agent.json
 coverage/
 .nyc_output/
-packages/agent-harness/.data/
+packages/*/.data/

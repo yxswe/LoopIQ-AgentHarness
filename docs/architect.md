@@ -216,20 +216,35 @@ are driven entirely by the SSE event stream — user bubbles come from
 so prompts submitted by any client (the browser form or an external agent) render
 identically.
 
-## Agent control skill: `.claude/skills/devui-control`
+## Agent control tool: `devui-control`
 
-A repo-local Claude Code skill that lets another agent drive the running devui
-server the same way a human uses the browser UI, over the existing HTTP/SSE
-surface (zero server changes). It drives and observes the *same* single shared
-harness/session, so its prompts also appear on the browser devui.
+A repo-local tool that lets another agent drive the running devui server the same
+way a human uses the browser UI, over the existing HTTP/SSE surface (zero server
+changes). It drives and observes the *same* single shared harness/session, so its
+prompts also appear on the browser devui.
 
-- `client.mjs` — dependency-free client: an async-generator `events()` over the
-  `/api/events` SSE stream plus `post()` helpers.
-- `devctl.mjs` — CLI with `send` (submit a prompt, block until `agent_end`, print
-  the assistant's final reply), `abort` (POST `/api/abort`), and `watch` (stream
-  the live event/debug feed). Server URL via `DEVUI_URL` / `DEVUI_PORT`.
-- `SKILL.md` — usage for the agent. Limitations: single shared session (sends
-  interleave with the human) and no history replay (only events after connect).
+The executable entities live in a cross-agent, git-tracked location so any code
+agent (Claude Code, Codex, etc.) can use them:
+
+- `.github/agent-tools/devui-control/client.mjs` — dependency-free client: an
+  async-generator `events()` over the `/api/events` SSE stream plus `post()`
+  helpers.
+- `.github/agent-tools/devui-control/devctl.mjs` — CLI with `send` (submit a
+  prompt, block until `agent_end`, print the assistant's final reply), `abort`
+  (POST `/api/abort`), and `watch` (stream the live event/debug feed). Server URL
+  via `DEVUI_URL` / `DEVUI_PORT`.
+- `.github/agent-tools/devui-control/README.md` — canonical usage doc.
+  Limitations: single shared session (sends interleave with the human) and no
+  history replay (only events after connect).
+
+Discovery entry points reference the tool without duplicating docs:
+
+- `AGENTS.md` (repo root, cross-agent standard) has an `Agent Tooling` section;
+  `CLAUDE.md` imports it via `@AGENTS.md`.
+- `.agents/skills/devui-control/SKILL.md` is the canonical Codex auto-discovery
+  manifest (frontmatter + pointer to the README).
+- `.claude/skills/devui-control/SKILL.md` is a relative symlink to that canonical
+  manifest, allowing Claude Code and Codex to share one skill definition.
 
 ## Data Flow
 
