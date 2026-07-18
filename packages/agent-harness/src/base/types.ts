@@ -48,15 +48,9 @@ export class CompactionError extends Error {
 	}
 }
 
-export type SessionErrorCode =
-	| "not_found"
-	| "invalid_session"
-	| "invalid_entry"
-	| "invalid_fork_target"
-	| "storage"
-	| "unknown";
+export type SessionErrorCode = "not_found" | "invalid_session" | "invalid_entry" | "storage" | "unknown";
 
-/** Error thrown by session storage, repositories, and session tree operations. */
+/** Error thrown by session storage and session operations. */
 export class SessionError extends Error {
 	/** Session subsystem error code. */
 	public code: SessionErrorCode;

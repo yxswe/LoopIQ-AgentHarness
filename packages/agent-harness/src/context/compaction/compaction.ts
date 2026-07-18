@@ -6,7 +6,7 @@ import {
 	createCustomMessage,
 } from "../../base/messages.ts";
 import type { ThinkingLevel } from "../../base/options.ts";
-import type { CompactionEntry, SessionTreeEntry } from "../../base/session-types.ts";
+import type { CompactionEntry, SessionEntry } from "../../base/session-types.ts";
 import { CompactionError, err, ok, type Result } from "../../base/types.ts";
 import { buildSessionContext } from "../../session/session.ts";
 import {
@@ -35,7 +35,7 @@ function safeJsonStringify(value: unknown): string {
 
 function extractFileOperations(
 	messages: AgentMessage[],
-	entries: SessionTreeEntry[],
+	entries: SessionEntry[],
 	prevCompactionIndex: number,
 ): FileOperations {
 	const fileOps = createFileOps();
@@ -57,7 +57,7 @@ function extractFileOperations(
 
 	return fileOps;
 }
-function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined {
+function getMessageFromEntry(entry: SessionEntry): AgentMessage | undefined {
 	if (entry.type === "message") {
 		return entry.message as AgentMessage;
 	}
@@ -76,7 +76,7 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
 	return undefined;
 }
 
-function getMessageFromEntryForCompaction(entry: SessionTreeEntry): AgentMessage | undefined {
+function getMessageFromEntryForCompaction(entry: SessionEntry): AgentMessage | undefined {
 	if (entry.type === "compaction") {
 		return undefined;
 	}
@@ -132,7 +132,7 @@ function getAssistantUsage(msg: AgentMessage): Usage | undefined {
 }
 
 /** Return usage from the last valid assistant message in session entries. */
-export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | undefined {
+export function getLastAssistantUsage(entries: SessionEntry[]): Usage | undefined {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (entry.type === "message") {
@@ -259,7 +259,7 @@ export function estimateTokens(message: AgentMessage): number {
 
 	return 0;
 }
-function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, endIndex: number): number[] {
+function findValidCutPoints(entries: SessionEntry[], startIndex: number, endIndex: number): number[] {
 	const cutPoints: number[] = [];
 	for (let i = startIndex; i < endIndex; i++) {
 		const entry = entries[i];
@@ -292,7 +292,7 @@ function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, end
 }
 
 /** Find the user-visible message that starts the turn containing an entry. */
-export function findTurnStartIndex(entries: SessionTreeEntry[], entryIndex: number, startIndex: number): number {
+export function findTurnStartIndex(entries: SessionEntry[], entryIndex: number, startIndex: number): number {
 	for (let i = entryIndex; i >= startIndex; i--) {
 		const entry = entries[i];
 		if (entry.type === "custom_message") {
@@ -320,7 +320,7 @@ export interface CutPointResult {
 
 /** Find the compaction cut point that keeps approximately the requested recent-token budget. */
 export function findCutPoint(
-	entries: SessionTreeEntry[],
+	entries: SessionEntry[],
 	startIndex: number,
 	endIndex: number,
 	keepRecentTokens: number,
@@ -532,7 +532,7 @@ export interface CompactionPreparation {
 
 /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
 export function prepareCompaction(
-	pathEntries: SessionTreeEntry[],
+	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
 ): Result<CompactionPreparation | undefined, CompactionError> {
 	if (pathEntries.length === 0 || pathEntries[pathEntries.length - 1].type === "compaction") {

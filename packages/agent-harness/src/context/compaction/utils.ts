@@ -1,7 +1,7 @@
 import type { Message } from "@loopiq/ai";
 import type { AgentMessage } from "../../base/messages.ts";
 
-/** File paths touched by a session branch or compaction range. */
+/** File paths touched by session history or a compaction range. */
 export interface FileOperations {
 	/** Files read but not necessarily modified. */
 	read: Set<string>;

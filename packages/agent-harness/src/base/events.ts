@@ -3,7 +3,7 @@ import type { AssistantMessageEvent, ImageContent, Model, TextContent, ToolResul
 import type { AgentMessage } from "./messages.ts";
 import type { AgentHarnessStreamOptions, AgentHarnessStreamOptionsPatch, ThinkingLevel } from "./options.ts";
 import type { AgentHarnessResources, PromptTemplate, Skill } from "./resource.ts";
-import type { CompactionEntry, CompactionPreparation, SessionTreeEntry } from "./session-types.ts";
+import type { CompactionEntry, CompactionPreparation, SessionEntry } from "./session-types.ts";
 
 export interface QueueUpdateEvent {
 	type: "queue_update";
@@ -83,7 +83,7 @@ export interface ToolResultEvent {
 export interface SessionBeforeCompactEvent {
 	type: "session_before_compact";
 	preparation: CompactionPreparation;
-	branchEntries: SessionTreeEntry[];
+	entries: SessionEntry[];
 	customInstructions?: string;
 	signal: AbortSignal;
 }

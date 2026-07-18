@@ -5,26 +5,26 @@ import type {
 	CustomEntry,
 	CustomMessageEntry,
 	MessageEntry,
+	SessionEntry,
 	SessionMetadata,
 	SessionStorage,
-	SessionTreeEntry,
 } from "../base/session-types.ts";
 
 export interface SessionContext {
 	messages: AgentMessage[];
 }
 
-export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionContext {
+export function buildSessionContext(entries: SessionEntry[]): SessionContext {
 	let compaction: CompactionEntry | null = null;
 
-	for (const entry of pathEntries) {
+	for (const entry of entries) {
 		if (entry.type === "compaction") {
 			compaction = entry;
 		}
 	}
 
 	const messages: AgentMessage[] = [];
-	const appendMessage = (entry: SessionTreeEntry) => {
+	const appendMessage = (entry: SessionEntry) => {
 		if (entry.type === "message") {
 			messages.push(entry.message as AgentMessage);
 		} else if (entry.type === "custom_message") {
@@ -42,18 +42,18 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
 
 	if (compaction) {
 		messages.push(createCompactionSummaryMessage(compaction.summary, compaction.tokensBefore, compaction.timestamp));
-		const compactionIdx = pathEntries.findIndex((e) => e.type === "compaction" && e.id === compaction.id);
+		const compactionIdx = entries.findIndex((entry) => entry.type === "compaction" && entry.id === compaction.id);
 		let foundFirstKept = false;
 		for (let i = 0; i < compactionIdx; i++) {
-			const entry = pathEntries[i]!;
+			const entry = entries[i]!;
 			if (entry.id === compaction.firstKeptEntryId) foundFirstKept = true;
 			if (foundFirstKept) appendMessage(entry);
 		}
-		for (let i = compactionIdx + 1; i < pathEntries.length; i++) {
-			appendMessage(pathEntries[i]!);
+		for (let i = compactionIdx + 1; i < entries.length; i++) {
+			appendMessage(entries[i]!);
 		}
 	} else {
-		for (const entry of pathEntries) {
+		for (const entry of entries) {
 			appendMessage(entry);
 		}
 	}
@@ -76,28 +76,15 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.storage;
 	}
 
-	getLeafId(): Promise<string | null> {
-		return this.storage.getLeafId();
-	}
-
-	getEntry(id: string): Promise<SessionTreeEntry | undefined> {
-		return this.storage.getEntry(id);
-	}
-
-	getEntries(): Promise<SessionTreeEntry[]> {
+	getEntries(): Promise<SessionEntry[]> {
 		return this.storage.getEntries();
 	}
 
-	async getBranch(fromId?: string): Promise<SessionTreeEntry[]> {
-		const leafId = fromId ?? (await this.storage.getLeafId());
-		return this.storage.getPathToRoot(leafId);
-	}
-
 	async buildContext(): Promise<SessionContext> {
-		return buildSessionContext(await this.getBranch());
+		return buildSessionContext(await this.getEntries());
 	}
 
-	private async appendTypedEntry<TEntry extends SessionTreeEntry>(entry: TEntry): Promise<string> {
+	private async appendTypedEntry<TEntry extends SessionEntry>(entry: TEntry): Promise<string> {
 		await this.storage.appendEntry(entry);
 		return entry.id;
 	}
@@ -106,7 +93,6 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.appendTypedEntry({
 			type: "message",
 			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
 			timestamp: new Date().toISOString(),
 			message,
 		} satisfies MessageEntry);
@@ -122,7 +108,6 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.appendTypedEntry({
 			type: "compaction",
 			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
 			timestamp: new Date().toISOString(),
 			summary,
 			firstKeptEntryId,
@@ -136,7 +121,6 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.appendTypedEntry({
 			type: "custom",
 			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
 			timestamp: new Date().toISOString(),
 			customType,
 			data,
@@ -152,7 +136,6 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
 		return this.appendTypedEntry({
 			type: "custom_message",
 			id: await this.storage.createEntryId(),
-			parentId: await this.storage.getLeafId(),
 			timestamp: new Date().toISOString(),
 			customType,
 			content,

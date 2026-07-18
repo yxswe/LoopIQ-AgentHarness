@@ -5,14 +5,15 @@ import type { AgentHookEvent, AgentHookEventResultMap, AgentNotificationEvent } 
 import type { AgentMessage } from "../base/messages.ts";
 import type { AgentHarnessOptions, AgentHarnessStreamOptions, QueueMode, ThinkingLevel } from "../base/options.ts";
 import type { AgentHarnessResources, AgentTool, PromptTemplate, Skill } from "../base/resource.ts";
-import type { AbortResult, Session } from "../base/session-types.ts";
+import type { AbortResult } from "../base/session-types.ts";
 import { AgentHarnessError, normalizeHarnessError, toError } from "../base/types.ts";
 import { NodeExecutionEnv } from "../env/nodejs.ts";
 import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
 import { MessageQueues } from "../queue/message-queues.ts";
 import { JsonlSessionStorage } from "../session/jsonl-storage.ts";
-import { toSession } from "../session/repo-utils.ts";
+import type { Session } from "../session/session.ts";
 import { SessionWriter } from "../session/session-writer.ts";
+import { getFileSystemResultOrThrow, toSession } from "../session/storage-utils.ts";
 import { formatSkillInvocation } from "../skills/skills.ts";
 import { AgentEventBus } from "./event-bus.ts";
 import { createUserMessage } from "./message-factory.ts";
@@ -47,8 +48,11 @@ type AgentHarnessInit<
 };
 
 async function openOrCreateSession(env: NodeExecutionEnv, sessionPath: string, cwd: string): Promise<Session> {
-	const existing = await env.readTextFile(sessionPath);
-	const storage = existing.ok
+	const exists = getFileSystemResultOrThrow(
+		await env.exists(sessionPath),
+		`Failed to check whether session exists ${sessionPath}`,
+	);
+	const storage = exists
 		? await JsonlSessionStorage.open(env, sessionPath)
 		: await JsonlSessionStorage.create(env, sessionPath, { cwd, sessionId: randomUUID() });
 	return toSession(storage);

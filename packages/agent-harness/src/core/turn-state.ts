@@ -3,7 +3,7 @@ import type { ExecutionEnv } from "../base/env.ts";
 import type { AgentMessage } from "../base/messages.ts";
 import type { AgentContext, AgentHarnessOptions, AgentHarnessStreamOptions, ThinkingLevel } from "../base/options.ts";
 import type { AgentHarnessResources, AgentTool, PromptTemplate, Skill } from "../base/resource.ts";
-import type { Session } from "../base/session-types.ts";
+import type { Session } from "../session/session.ts";
 import { cloneStreamOptions } from "./stream-options.ts";
 
 export interface TurnState<

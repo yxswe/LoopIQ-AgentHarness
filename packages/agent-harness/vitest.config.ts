@@ -8,6 +8,7 @@ export default defineConfig({
 	test: {
 		globals: true,
 		environment: "node",
+		exclude: ["dist/**", "node_modules/**"],
 		testTimeout: 30000, // 30 seconds for API calls
 	},
 	resolve: {

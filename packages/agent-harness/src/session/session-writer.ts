@@ -1,4 +1,5 @@
-import type { PendingSessionWrite, Session } from "../base/session-types.ts";
+import type { PendingSessionWrite } from "../base/session-types.ts";
+import type { Session } from "./session.ts";
 
 export class SessionWriter {
 	private pending: PendingSessionWrite[] = [];

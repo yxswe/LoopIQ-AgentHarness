@@ -144,19 +144,23 @@ wiring with an end-to-end write/read/edit/search/list/exec round trip.
 
 ### Session & persistence (`src/session/`)
 
-Append-only session tree persisted as JSONL, with branching and compaction.
+Append-only linear Session history persisted as JSONL. Physical JSONL order is
+authoritative; the current format has no parent pointers, active leaf, in-file
+branching, or tree navigation. See [`session.md`](./session.md) for the format,
+invariants, compatibility policy, and current limitations.
 
 - `session.ts` — `Session`, high-level API over `SessionStorage`:
-  `getBranch()`, `buildContext()`, `appendMessage()`, `appendCompaction()`,
+  `getEntries()`, `buildContext()`, `appendMessage()`, `appendCompaction()`,
   `appendCustomEntry()`, `appendCustomMessageEntry()`.
 - `session-writer.ts` — `SessionWriter`, buffered writer batching pending entries
-  and flushing atomically (`flush()`).
-- `jsonl-storage.ts` — `JsonlSessionStorage`, JSONL file backend. Header line =
-  session metadata (id, version, timestamp, cwd, parentSession); each entry is a
+  and flushing them serially (`flush()`).
+- `jsonl-storage.ts` — `JsonlSessionStorage`, version 4 JSONL backend. Header line =
+  session metadata (id, version, timestamp, cwd); each following line is a
   JSON line typed as `message` | `compaction` | `custom` | `custom_message`.
-  Entry IDs via uuidv7.
-- `jsonl-repo.ts` — `JsonlSessionRepo`, factory to create/open/fork sessions and
-  branch at a specific entry.
+  Unsupported versions, entry types, malformed entries, and duplicate IDs are
+  rejected. Entry IDs use uuidv7.
+- `storage-utils.ts` — storage error conversion plus the `SessionStorage` to
+  `Session` adapter.
 
 ### Context compaction (`src/context/compaction/`)
 
@@ -170,8 +174,8 @@ hook lets apps override or augment compaction.
 - `messages.ts` — `AgentMessage` union (LLM messages + custom types such as
   `BashExecutionMessage`, `CustomMessage`, `CompactionSummaryMessage`);
   extensible via module augmentation.
-- `session-types.ts` — `SessionTreeEntry`, `SessionStorage`, `SessionMetadata` /
-  `JsonlSessionMetadata`, `SessionRepo`, `PendingSessionWrite`.
+- `session-types.ts` — `SessionEntry`, `SessionStorage`, `SessionMetadata` /
+  `JsonlSessionMetadata`, `PendingSessionWrite`.
 - `resource.ts` — `AgentTool`, `Skill` (from SKILL.md), `PromptTemplate`,
   `AgentHarnessResources`.
 - `options.ts` — `AgentHarnessStreamOptions`, `QueueMode`, `AgentHarnessOptions`.
@@ -243,7 +247,7 @@ harness/session, so its prompts also appear on the browser devui.
 
 - Turn-based loop with mid-flight steering/follow-up queues.
 - Event-driven extensibility via interceptable hooks.
-- Append-only JSONL session log with branching (forking).
+- Append-only, versioned, linear JSONL Session log.
 - Lazy provider/model loading.
 - Per-tool or global sequential/parallel tool execution.
 - Automatic context compaction to manage token budgets.

@@ -1,8 +1,8 @@
-import type { Message, Model, Models, SimpleStreamOptions, Transport } from "@loopiq/ai";
+import type { Model, Models, SimpleStreamOptions, Transport } from "@loopiq/ai";
 import type { Session } from "../session/session.ts";
-import type { ExecutionEnv, FileOperations } from "./env.ts";
+import type { ExecutionEnv } from "./env.ts";
 import type { AgentMessage } from "./messages.ts";
-import type { AgentHarnessResources, AgentTool, PromptTemplate, Skill, ToolExecutionMode } from "./resource.ts";
+import type { AgentHarnessResources, AgentTool, PromptTemplate, Skill } from "./resource.ts";
 
 /**
  * Controls how many queued user messages are injected when the agent loop reaches a queue drain point.
@@ -50,7 +50,7 @@ export interface AgentHarnessOptions<
 	sessionPath: string;
 	/**
 	 * Provider collection used for all model requests (turn streaming,
-	 * compaction, branch summarization). Auth resolves through the providers'
+	 * compaction). Auth resolves through the providers'
 	 * auth.
 	 */
 	models: Models;
