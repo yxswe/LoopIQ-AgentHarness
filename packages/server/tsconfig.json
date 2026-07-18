@@ -1,0 +1,13 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"paths": {
+			"@loopiq/ai": ["../ai/src/index.ts"],
+			"@loopiq/ai/*": ["../ai/src/*.ts", "../ai/src/providers/*.ts"],
+			"@loopiq/agent-core": ["../agent-harness/src/index.ts"]
+		}
+	},
+	"include": ["src/**/*.ts"],
+	"exclude": ["node_modules"]
+}

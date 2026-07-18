@@ -1,16 +1,7 @@
-import {
-	type AssistantMessage,
-	type ToolResultMessage,
-	validateToolArguments,
-} from "@loopiq/ai/compat";
+import { type AssistantMessage, type ToolResultMessage, validateToolArguments } from "@loopiq/ai/compat";
 import type { AgentEventSink, AgentHookEmitter } from "../base/events.ts";
 import type { AgentContext } from "../base/options.ts";
-import type {
-	AgentTool,
-	AgentToolCall,
-	AgentToolResult,
-	ToolExecutionMode,
-} from "../base/resource.ts";
+import type { AgentTool, AgentToolCall, AgentToolResult, ToolExecutionMode } from "../base/resource.ts";
 
 /**
  * Execute tool calls from an assistant message.

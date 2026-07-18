@@ -1,74 +1,25 @@
-import type { AssistantMessage, ImageContent, Model, Models, UserMessage } from "@loopiq/ai";
-
-import type {
-	AgentHookEventResultMap,
-	AgentHookEvent,
-	AgentNotificationEvent,
-	AgentRunEvent,
-} from "../base/events.ts";
-import type {
-	AgentContext,
-	QueueMode,
-	StreamFn,
-	ThinkingLevel,
-	AgentHarnessOptions,
-	AgentHarnessStreamOptions,
-	AgentHarnessStreamOptionsPatch,
-} from "../base/options.ts";
-import type { AgentHarnessResources, AgentTool, PromptTemplate, Skill } from "../base/resource.ts";
+import { randomUUID } from "node:crypto";
+import type { AssistantMessage, ImageContent, Model, Models } from "@loopiq/ai";
 import type { ExecutionEnv } from "../base/env.ts";
+import type { AgentHookEvent, AgentHookEventResultMap, AgentNotificationEvent } from "../base/events.ts";
 import type { AgentMessage } from "../base/messages.ts";
-
-import { type AgentLoopParams, runAgentLoop } from "./agent-loop.ts";
-import { AgentEventBus } from "./event-bus.ts";
+import type { AgentHarnessOptions, AgentHarnessStreamOptions, QueueMode, ThinkingLevel } from "../base/options.ts";
+import type { AgentHarnessResources, AgentTool, PromptTemplate, Skill } from "../base/resource.ts";
+import type { AbortResult } from "../base/session-types.ts";
+import { AgentHarnessError, normalizeHarnessError, toError } from "../base/types.ts";
+import { NodeExecutionEnv } from "../env/nodejs.ts";
 import { formatPromptTemplateInvocation } from "../prompt-templates.ts";
+import { MessageQueues } from "../queue/message-queues.ts";
+import { JsonlSessionStorage } from "../session/jsonl-storage.ts";
+import type { Session } from "../session/session.ts";
+import { SessionWriter } from "../session/session-writer.ts";
+import { getFileSystemResultOrThrow, toSession } from "../session/storage-utils.ts";
 import { formatSkillInvocation } from "../skills/skills.ts";
-import type {
-	AbortResult,
-	PendingSessionWrite,
-	Session,
-} from "../base/session-types.ts";
-import {
-	AgentHarnessError,
-	normalizeHarnessError,
-	normalizeHookError,
-	toError,
-} from "../base/types.ts";
-
-function createUserMessage(text: string, images?: ImageContent[]): UserMessage {
-	const content: Array<{ type: "text"; text: string } | ImageContent> = [{ type: "text", text }];
-	if (images) content.push(...images);
-	return { role: "user", content, timestamp: Date.now() };
-}
-
-function createFailureMessage(model: Model<any>, error: unknown, aborted: boolean): AssistantMessage {
-	return {
-		role: "assistant",
-		content: [{ type: "text", text: "" }],
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		stopReason: aborted ? "aborted" : "error",
-		errorMessage: error instanceof Error ? error.message : String(error),
-		timestamp: Date.now(),
-		usage: {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		},
-	};
-}
-
-function cloneStreamOptions(streamOptions?: AgentHarnessStreamOptions): AgentHarnessStreamOptions {
-	return {
-		...streamOptions,
-		headers: streamOptions?.headers ? { ...streamOptions.headers } : undefined,
-		metadata: streamOptions?.metadata ? { ...streamOptions.metadata } : undefined,
-	};
-}
+import { AgentEventBus } from "./event-bus.ts";
+import { createUserMessage } from "./message-factory.ts";
+import { cloneStreamOptions } from "./stream-options.ts";
+import { TurnRunner } from "./turn-runner.ts";
+import { buildContext, buildTurnState, type TurnState } from "./turn-state.ts";
 
 function findDuplicateNames(names: string[]): string[] {
 	const seen = new Set<string>();
@@ -80,64 +31,31 @@ function findDuplicateNames(names: string[]): string[] {
 	return [...duplicates];
 }
 
-function applyStreamOptionsPatch(
-	base: AgentHarnessStreamOptions,
-	patch?: AgentHarnessStreamOptionsPatch,
-): AgentHarnessStreamOptions {
-	const result = cloneStreamOptions(base);
-	if (!patch) return result;
-
-	if (Object.hasOwn(patch, "transport")) result.transport = patch.transport;
-	if (Object.hasOwn(patch, "timeoutMs")) result.timeoutMs = patch.timeoutMs;
-	if (Object.hasOwn(patch, "maxRetries")) result.maxRetries = patch.maxRetries;
-	if (Object.hasOwn(patch, "maxRetryDelayMs")) result.maxRetryDelayMs = patch.maxRetryDelayMs;
-	if (Object.hasOwn(patch, "cacheRetention")) result.cacheRetention = patch.cacheRetention;
-
-	if (Object.hasOwn(patch, "headers")) {
-		if (patch.headers === undefined) {
-			result.headers = undefined;
-		} else {
-			const headers = { ...(result.headers ?? {}) };
-			for (const [key, value] of Object.entries(patch.headers)) {
-				if (value === undefined) delete headers[key];
-				else headers[key] = value;
-			}
-			result.headers = Object.keys(headers).length > 0 ? headers : undefined;
-		}
-	}
-
-	if (Object.hasOwn(patch, "metadata")) {
-		if (patch.metadata === undefined) {
-			result.metadata = undefined;
-		} else {
-			const metadata = { ...(result.metadata ?? {}) };
-			for (const [key, value] of Object.entries(patch.metadata)) {
-				if (value === undefined) delete metadata[key];
-				else metadata[key] = value;
-			}
-			result.metadata = Object.keys(metadata).length > 0 ? metadata : undefined;
-		}
-	}
-
-	return result;
-}
-
 type AgentHarnessPhase = "idle" | "turn" | "compaction" | "retry";
 
-interface AgentHarnessTurnState<
+/**
+ * Resolved construction inputs for {@link AgentHarness}. The public
+ * {@link AgentHarnessOptions.cwd}/`sessionPath` are replaced by the concrete
+ * `env`/`session` that {@link AgentHarness.create} assembles internally.
+ */
+type AgentHarnessInit<
 	TSkill extends Skill = Skill,
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
 	TTool extends AgentTool = AgentTool,
-> {
-	messages: AgentMessage[];
-	resources: AgentHarnessResources<TSkill, TPromptTemplate>;
-	streamOptions: AgentHarnessStreamOptions;
-	sessionId: string;
-	systemPrompt: string;
-	model: Model<any>;
-	thinkingLevel: ThinkingLevel;
-	tools: TTool[];
-	activeTools: TTool[];
+> = Omit<AgentHarnessOptions<TSkill, TPromptTemplate, TTool>, "cwd" | "sessionPath"> & {
+	env: ExecutionEnv;
+	session: Session;
+};
+
+async function openOrCreateSession(env: NodeExecutionEnv, sessionPath: string, cwd: string): Promise<Session> {
+	const exists = getFileSystemResultOrThrow(
+		await env.exists(sessionPath),
+		`Failed to check whether session exists ${sessionPath}`,
+	);
+	const storage = exists
+		? await JsonlSessionStorage.open(env, sessionPath)
+		: await JsonlSessionStorage.create(env, sessionPath, { cwd, sessionId: randomUUID() });
+	return toSession(storage);
 }
 
 export class AgentHarness<
@@ -145,9 +63,10 @@ export class AgentHarness<
 	TPromptTemplate extends PromptTemplate = PromptTemplate,
 	TTool extends AgentTool = AgentTool,
 > {
-	readonly env: ExecutionEnv;
+	private readonly env: ExecutionEnv;
 	private session: Session;
-	readonly models: Models;
+	private sessionWriter!: SessionWriter;
+	private readonly models: Models;
 	private resources: AgentHarnessResources<TSkill, TPromptTemplate>;
 	private streamOptions: AgentHarnessStreamOptions;
 	private systemPrompt: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>["systemPrompt"];
@@ -161,19 +80,37 @@ export class AgentHarness<
 	private phase: AgentHarnessPhase = "idle";
 	private runAbortController?: AbortController;
 	private runPromise?: Promise<void>;
-	private pendingSessionWrites: PendingSessionWrite[] = [];
-	private steerQueue: UserMessage[] = [];
-	private followUpQueue: UserMessage[] = [];
-	private nextTurnQueue: AgentMessage[] = [];
+	private readonly queues = new MessageQueues();
 	private readonly events = new AgentEventBus<TSkill, TPromptTemplate>();
 
-	constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
+	/**
+	 * Create a harness wired to a node execution environment (from `cwd`) and a
+	 * JSONL-backed session (from `sessionPath`, opened if present, otherwise
+	 * created). This is the single public entry point; the constructor is
+	 * internal because session assembly is asynchronous.
+	 */
+	static async create<
+		TSkill extends Skill = Skill,
+		TPromptTemplate extends PromptTemplate = PromptTemplate,
+		TTool extends AgentTool = AgentTool,
+	>(
+		options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>,
+	): Promise<AgentHarness<TSkill, TPromptTemplate, TTool>> {
+		const { cwd, sessionPath, ...rest } = options;
+		const env = new NodeExecutionEnv({ cwd });
+		const session = await openOrCreateSession(env, sessionPath, cwd);
+		return new AgentHarness<TSkill, TPromptTemplate, TTool>({ env, session, ...rest });
+	}
+
+	private constructor(options: AgentHarnessInit<TSkill, TPromptTemplate, TTool>) {
 		this.env = options.env;
 		this.session = options.session;
-		this.models = options.models;
-		this.resources = options.resources ?? {};
-		this.streamOptions = cloneStreamOptions(options.streamOptions);
+		this.sessionWriter = new SessionWriter(this.session);
 		this.systemPrompt = options.systemPrompt;
+		this.models = options.models;
+		this.model = options.model;
+		this.thinkingLevel = options.thinkingLevel ?? "off";
+		this.resources = options.resources ?? {};
 		this.validateUniqueNames(
 			(options.tools ?? []).map((tool) => tool.name),
 			"Duplicate tool name(s)",
@@ -181,13 +118,12 @@ export class AgentHarness<
 		for (const tool of options.tools ?? []) {
 			this.tools.set(tool.name, tool);
 		}
-		this.model = options.model;
-		this.thinkingLevel = options.thinkingLevel ?? "off";
+
 		this.activeToolNames = options.activeToolNames
 			? [...options.activeToolNames]
 			: (options.tools ?? []).map((tool) => tool.name);
-		this.validateUniqueNames(this.activeToolNames, "Duplicate active tool name(s)");
 		this.validateToolNames(this.activeToolNames);
+		this.streamOptions = cloneStreamOptions(options.streamOptions);
 		this.steeringQueueMode = options.steeringMode ?? "one-at-a-time";
 		this.followUpQueueMode = options.followUpMode ?? "one-at-a-time";
 	}
@@ -203,236 +139,40 @@ export class AgentHarness<
 		const missing = toolNames.filter((name) => !tools.has(name));
 		if (missing.length > 0) throw new AgentHarnessError("invalid_argument", `Unknown tool(s): ${missing.join(", ")}`);
 	}
-	
-	private async createTurnState(): Promise<AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>> {
-		const context = await this.session.buildContext();
-		const resources = this.getResources();
-		const sessionMetadata = await this.session.getMetadata();
-		const tools = [...this.tools.values()];
-		const activeTools = this.activeToolNames
-			.map((name) => this.tools.get(name))
-			.filter((tool): tool is TTool => tool !== undefined);
-		let systemPrompt = "You are a helpful assistant.";
-		if (typeof this.systemPrompt === "string") {
-			systemPrompt = this.systemPrompt;
-		} else if (this.systemPrompt) {
-			systemPrompt = await this.systemPrompt({
-				env: this.env,
-				session: this.session,
-				model: this.model,
-				thinkingLevel: this.thinkingLevel,
-				activeTools,
-				resources,
-			});
-		}
-		return {
-			messages: context.messages,
-			resources,
-			streamOptions: cloneStreamOptions(this.streamOptions),
-			sessionId: sessionMetadata.id,
-			systemPrompt,
+
+	private buildTurnStateFromConfig(): Promise<TurnState<TSkill, TPromptTemplate, TTool>> {
+		return buildTurnState({
+			session: this.session,
+			env: this.env,
 			model: this.model,
 			thinkingLevel: this.thinkingLevel,
-			tools,
-			activeTools,
-		};
-	}
-
-	private async flushPendingSessionWrites(): Promise<void> {
-		while (this.pendingSessionWrites.length > 0) {
-			const write = this.pendingSessionWrites[0]!;
-			if (write.type === "message") {
-				await this.session.appendMessage(write.message);
-			} else if (write.type === "model_change") {
-				await this.session.appendModelChange(write.provider, write.modelId);
-			} else if (write.type === "thinking_level_change") {
-				await this.session.appendThinkingLevelChange(write.thinkingLevel);
-			} else if (write.type === "active_tools_change") {
-				await this.session.appendActiveToolsChange(write.activeToolNames);
-			} else if (write.type === "custom") {
-				await this.session.appendCustomEntry(write.customType, write.data);
-			} else if (write.type === "custom_message") {
-				await this.session.appendCustomMessageEntry(write.customType, write.content, write.display, write.details);
-			} else if (write.type === "label") {
-				await this.session.appendLabel(write.targetId, write.label);
-			} else if (write.type === "session_info") {
-				await this.session.appendSessionName(write.name ?? "");
-			} else if (write.type === "leaf") {
-				await this.session.getStorage().setLeafId(write.targetId);
-			}
-			this.pendingSessionWrites.shift();
-		}
-	}
-
-	private async emitBeforeProviderRequest(
-		model: Model<any>,
-		sessionId: string,
-		streamOptions: AgentHarnessStreamOptions,
-	): Promise<AgentHarnessStreamOptions> {
-		const handlers = this.events.getHandlers("before_provider_request");
-		let current = cloneStreamOptions(streamOptions);
-		if (!handlers || handlers.size === 0) return current;
-		for (const handler of handlers) {
-			try {
-				const result = await handler({
-					type: "before_provider_request",
-					model,
-					sessionId,
-					streamOptions: cloneStreamOptions(current),
-				});
-				if (result?.streamOptions) {
-					current = applyStreamOptionsPatch(current, result.streamOptions);
-				}
-			} catch (error) {
-				throw normalizeHookError(error);
-			}
-		}
-		return current;
-	}
-
-	private async emitQueueUpdate(): Promise<void> {
-		await this.events.emit({
-			type: "queue_update",
-			steer: [...this.steerQueue],
-			followUp: [...this.followUpQueue],
-			nextTurn: [...this.nextTurnQueue],
+			tools: this.tools,
+			activeToolNames: this.activeToolNames,
+			resources: this.getResources(),
+			streamOptions: this.streamOptions,
+			systemPrompt: this.systemPrompt,
 		});
 	}
 
-	private async handleAgentEvent(event: AgentRunEvent, signal?: AbortSignal): Promise<void> {
-		if (event.type === "message_end") {
-			await this.session.appendMessage(event.message);
-			await this.events.emit(event, signal);
-			return;
-		}
-		if (event.type === "turn_end") {
-			let eventError: unknown;
-			try {
-				await this.events.emit(event, signal);
-			} catch (error) {
-				eventError = error;
-			}
-			const hadPendingMutations = this.pendingSessionWrites.length > 0;
-			await this.flushPendingSessionWrites();
-			if (eventError) throw eventError;
-			await this.events.emit({ type: "save_point", hadPendingMutations });
-			return;
-		}
-		if (event.type === "agent_end") {
-			await this.flushPendingSessionWrites();
-			this.phase = "idle";
-			await this.events.emit(event, signal);
-			await this.events.emit({ type: "settled", nextTurnCount: this.nextTurnQueue.length }, signal);
-			return;
-		}
-		await this.events.emit(event, signal);
-	}
-
-	private async emitRunFailure(
-		model: Model<any>,
-		error: unknown,
-		aborted: boolean,
-		signal: AbortSignal,
-	): Promise<AgentMessage[]> {
-		const failureMessage = createFailureMessage(model, error, aborted);
-		await this.handleAgentEvent({ type: "message_start", message: failureMessage }, signal);
-		await this.handleAgentEvent({ type: "message_end", message: failureMessage }, signal);
-		await this.handleAgentEvent({ type: "turn_end", message: failureMessage, toolResults: [] }, signal);
-		await this.handleAgentEvent({ type: "agent_end", messages: [failureMessage] }, signal);
-		return [failureMessage];
-	}
-//////////////////////////////////////////////////////////////////////////////////////////////
-	
-	private createContext(
-		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
-		systemPrompt?: string,
-	): AgentContext {
-		return {
-			systemPrompt: systemPrompt ?? turnState.systemPrompt,
-			messages: turnState.messages.slice(),
-			tools: turnState.activeTools.slice(),
-		};
-	}
-
-	private createStreamFn(getTurnState: () => AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>): StreamFn {
-		return async (model, context, streamOptions) => {
-			const turnState = getTurnState();
-			const snapshotOptions: AgentHarnessStreamOptions = { ...turnState.streamOptions };
-			const requestOptions = await this.emitBeforeProviderRequest(model, turnState.sessionId, snapshotOptions);
-			return this.models.streamSimple(model, context, {
-				cacheRetention: requestOptions.cacheRetention,
-				headers: requestOptions.headers,
-				maxRetries: requestOptions.maxRetries,
-				maxRetryDelayMs: requestOptions.maxRetryDelayMs,
-				metadata: requestOptions.metadata,
-				onPayload: async (payload) => await this.events.emitBeforeProviderPayload(model, payload),
-				onResponse: async (response) => {
-					const headers = { ...(response.headers as Record<string, string>) };
-					await this.events.emit(
-						{ type: "after_provider_response", status: response.status, headers },
-						streamOptions?.signal,
-					);
-				},
-				reasoning: streamOptions?.reasoning,
-				signal: streamOptions?.signal,
-				sessionId: turnState.sessionId,
-				timeoutMs: requestOptions.timeoutMs,
-				transport: requestOptions.transport,
-			});
-		};
-	}
-
-	private async drainQueuedMessages(queue: AgentMessage[], mode: QueueMode): Promise<AgentMessage[]> {
-		const messages = mode === "all" ? queue.splice(0) : queue.splice(0, 1);
-		if (messages.length === 0) return messages;
-		try {
-			await this.emitQueueUpdate();
-			return messages;
-		} catch (error) {
-			queue.unshift(...messages);
-			throw normalizeHookError(error);
-		}
-	}
-
-	private createLoopParams(
-		getTurnState: () => AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
-		setTurnState: (turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => void,
-	): AgentLoopParams {
-		const turnState = getTurnState();
-		return {
-			model: turnState.model,
-			reasoning: turnState.thinkingLevel === "off" ? undefined : turnState.thinkingLevel,
-			prepareNextTurn: async () => {
-				await this.flushPendingSessionWrites();
-				const nextTurnState = await this.createTurnState();
-				setTurnState(nextTurnState);
-				return {
-					context: this.createContext(nextTurnState),
-					model: nextTurnState.model,
-					thinkingLevel: nextTurnState.thinkingLevel,
-				};
-			},
-			getSteeringMessages: async () => this.drainQueuedMessages(this.steerQueue, this.steeringQueueMode),
-			getFollowUpMessages: async () => this.drainQueuedMessages(this.followUpQueue, this.followUpQueueMode),
-		};
+	private async emitQueueUpdate(): Promise<void> {
+		const snap = this.queues.snapshot();
+		await this.events.emit({
+			type: "queue_update",
+			steer: snap.steer,
+			followUp: snap.followUp,
+			nextTurn: snap.nextTurn,
+		});
 	}
 
 	private async executeTurn(
-		turnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>,
+		turnState: TurnState<TSkill, TPromptTemplate, TTool>,
 		text: string,
 		options?: { images?: ImageContent[] },
 	): Promise<AssistantMessage> {
-		let activeTurnState = turnState;
 		let messages: AgentMessage[] = [createUserMessage(text, options?.images)];
-		if (this.nextTurnQueue.length > 0) {
-			const queuedMessages = this.nextTurnQueue.splice(0);
-			try {
-				await this.emitQueueUpdate();
-			} catch (error) {
-				this.nextTurnQueue.unshift(...queuedMessages);
-				throw normalizeHookError(error);
-			}
-			messages = [...queuedMessages, messages[0]!];
+		const queued = await this.queues.takeNextTurn(() => this.emitQueueUpdate());
+		if (queued.length > 0) {
+			messages = [...queued, messages[0]!];
 		}
 		const beforeResult = await this.events.emitHook({
 			type: "before_agent_start",
@@ -444,41 +184,25 @@ export class AgentHarness<
 		if (beforeResult?.messages) messages = [...messages, ...beforeResult.messages];
 
 		const abortController = new AbortController();
-		const getTurnState = () => activeTurnState;
-		const setTurnState = (nextTurnState: AgentHarnessTurnState<TSkill, TPromptTemplate, TTool>) => {
-			activeTurnState = nextTurnState;
-		};
 		this.runAbortController = abortController;
-		const runResultPromise = (async () => {
-			try {
-				return await runAgentLoop(
-					messages,
-					this.createContext(turnState, beforeResult?.systemPrompt),
-					this.createLoopParams(getTurnState, setTurnState),
-					(event) => this.handleAgentEvent(event, abortController.signal),
-					this.events.emitHook.bind(this.events),
-					abortController.signal,
-					this.createStreamFn(getTurnState),
-				);
-			} catch (error) {
-				try {
-					return await this.emitRunFailure(
-						activeTurnState.model,
-						error,
-						abortController.signal.aborted,
-						abortController.signal,
-					);
-				} catch (failureError) {
-					const cause = new AggregateError(
-						[toError(error), toError(failureError)],
-						"Agent run failed and failure reporting failed",
-					);
-					throw new AgentHarnessError("unknown", cause.message, cause);
-				}
-			}
-		})();
+		const runner = new TurnRunner<TSkill, TPromptTemplate, TTool>({
+			session: this.session,
+			models: this.models,
+			events: this.events,
+			queues: this.queues,
+			sessionWriter: this.sessionWriter,
+			signal: abortController.signal,
+			steeringMode: this.steeringQueueMode,
+			followUpMode: this.followUpQueueMode,
+			turnState,
+			refreshTurnState: () => this.buildTurnStateFromConfig(),
+			emitQueueUpdate: () => this.emitQueueUpdate(),
+			markIdle: () => {
+				this.phase = "idle";
+			},
+		});
 		try {
-			const newMessages = await runResultPromise;
+			const newMessages = await runner.run(messages, buildContext(turnState, beforeResult?.systemPrompt));
 			for (let i = newMessages.length - 1; i >= 0; i--) {
 				const message = newMessages[i]!;
 				if (message.role === "assistant") {
@@ -488,13 +212,13 @@ export class AgentHarness<
 			throw new AgentHarnessError("invalid_state", "AgentHarness prompt completed without an assistant message");
 		} finally {
 			try {
-				await this.flushPendingSessionWrites();
+				await this.sessionWriter.flush();
 			} finally {
 				this.runAbortController = undefined;
 			}
 		}
 	}
-///////////////////////////////////////////////////////////////////////////////////////////
+
 	private startRunPromise(): () => void {
 		let finish = () => {};
 		this.runPromise = new Promise<void>((resolve) => {
@@ -506,12 +230,26 @@ export class AgentHarness<
 		};
 	}
 
-	async prompt(text: string, options?: { images?: ImageContent[] }): Promise<AssistantMessage> {
+	/**
+	 * Single external entry point for user input. Routes by phase: when idle it
+	 * starts a new turn and resolves with the assistant message; when a turn is
+	 * in flight it steers the running turn and resolves with `void`.
+	 *
+	 * Internal `followUp`/`nextTurn` routing is intentionally not exposed yet.
+	 */
+	async send(text: string, options?: { images?: ImageContent[] }): Promise<AssistantMessage | void> {
+		if (this.phase === "idle") {
+			return this.prompt(text, options);
+		}
+		return this.steer(text, options);
+	}
+
+	private async prompt(text: string, options?: { images?: ImageContent[] }): Promise<AssistantMessage> {
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
 		try {
-			const turnState = await this.createTurnState();
+			const turnState = await this.buildTurnStateFromConfig();
 			return await this.executeTurn(turnState, text, options);
 		} catch (error) {
 			this.phase = "idle";
@@ -521,12 +259,12 @@ export class AgentHarness<
 		}
 	}
 
-	async skill(name: string, additionalInstructions?: string): Promise<AssistantMessage> {
+	private async skill(name: string, additionalInstructions?: string): Promise<AssistantMessage> {
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
 		try {
-			const turnState = await this.createTurnState();
+			const turnState = await this.buildTurnStateFromConfig();
 			const skill = (turnState.resources.skills ?? []).find((candidate) => candidate.name === name);
 			if (!skill) throw new AgentHarnessError("invalid_argument", `Unknown skill: ${name}`);
 			return await this.executeTurn(turnState, formatSkillInvocation(skill, additionalInstructions));
@@ -538,12 +276,12 @@ export class AgentHarness<
 		}
 	}
 
-	async promptFromTemplate(name: string, args: string[] = []): Promise<AssistantMessage> {
+	private async promptFromTemplate(name: string, args: string[] = []): Promise<AssistantMessage> {
 		if (this.phase !== "idle") throw new AgentHarnessError("busy", "AgentHarness is busy");
 		this.phase = "turn";
 		const finishRunPromise = this.startRunPromise();
 		try {
-			const turnState = await this.createTurnState();
+			const turnState = await this.buildTurnStateFromConfig();
 			const template = (turnState.resources.promptTemplates ?? []).find((candidate) => candidate.name === name);
 			if (!template) throw new AgentHarnessError("invalid_argument", `Unknown prompt template: ${name}`);
 			return await this.executeTurn(turnState, formatPromptTemplateInvocation(template, args));
@@ -555,20 +293,20 @@ export class AgentHarness<
 		}
 	}
 
-	async steer(text: string, options?: { images?: ImageContent[] }): Promise<void> {
+	private async steer(text: string, options?: { images?: ImageContent[] }): Promise<void> {
 		if (this.phase === "idle") throw new AgentHarnessError("invalid_state", "Cannot steer while idle");
-		this.steerQueue.push(createUserMessage(text, options?.images));
+		this.queues.enqueueSteer(createUserMessage(text, options?.images));
 		await this.emitQueueUpdate();
 	}
 
-	async followUp(text: string, options?: { images?: ImageContent[] }): Promise<void> {
+	private async followUp(text: string, options?: { images?: ImageContent[] }): Promise<void> {
 		if (this.phase === "idle") throw new AgentHarnessError("invalid_state", "Cannot follow up while idle");
-		this.followUpQueue.push(createUserMessage(text, options?.images));
+		this.queues.enqueueFollowUp(createUserMessage(text, options?.images));
 		await this.emitQueueUpdate();
 	}
 
-	async nextTurn(text: string, options?: { images?: ImageContent[] }): Promise<void> {
-		this.nextTurnQueue.push(createUserMessage(text, options?.images));
+	private async nextTurn(text: string, options?: { images?: ImageContent[] }): Promise<void> {
+		this.queues.enqueueNextTurn(createUserMessage(text, options?.images));
 		await this.emitQueueUpdate();
 	}
 
@@ -579,11 +317,6 @@ export class AgentHarness<
 	async setModel(model: Model<any>): Promise<void> {
 		try {
 			const previousModel = this.model;
-			if (this.phase === "idle") {
-				await this.session.appendModelChange(model.provider, model.id);
-			} else {
-				this.pendingSessionWrites.push({ type: "model_change", provider: model.provider, modelId: model.id });
-			}
 			this.model = model;
 			await this.events.emit({ type: "model_update", model, previousModel, source: "set" });
 		} catch (error) {
@@ -598,11 +331,6 @@ export class AgentHarness<
 	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
 		try {
 			const previousLevel = this.thinkingLevel;
-			if (this.phase === "idle") {
-				await this.session.appendThinkingLevelChange(level);
-			} else {
-				this.pendingSessionWrites.push({ type: "thinking_level_change", thinkingLevel: level });
-			}
 			this.thinkingLevel = level;
 			await this.events.emit({ type: "thinking_level_update", level, previousLevel });
 		} catch (error) {
@@ -610,50 +338,15 @@ export class AgentHarness<
 		}
 	}
 
-	getTools(): TTool[] {
-		return [...this.tools.values()];
-	}
-
-	getActiveTools(): TTool[] {
-		return this.activeToolNames.map((name) => this.tools.get(name)!);
-	}
-
-	getSteeringMode(): QueueMode {
-		return this.steeringQueueMode;
-	}
-
-	async setSteeringMode(mode: QueueMode): Promise<void> {
-		this.steeringQueueMode = mode;
-	}
-
-	getFollowUpMode(): QueueMode {
-		return this.followUpQueueMode;
-	}
-
-	async setFollowUpMode(mode: QueueMode): Promise<void> {
-		this.followUpQueueMode = mode;
-	}
-
-	getResources(): AgentHarnessResources<TSkill, TPromptTemplate> {
+	private getResources(): AgentHarnessResources<TSkill, TPromptTemplate> {
 		return {
 			skills: this.resources.skills?.slice(),
 			promptTemplates: this.resources.promptTemplates?.slice(),
 		};
 	}
 
-	getStreamOptions(): AgentHarnessStreamOptions {
-		return cloneStreamOptions(this.streamOptions);
-	}
-
-	async setStreamOptions(streamOptions: AgentHarnessStreamOptions): Promise<void> {
-		this.streamOptions = cloneStreamOptions(streamOptions);
-	}
-
 	async abort(): Promise<AbortResult> {
-		const clearedSteer = [...this.steerQueue];
-		const clearedFollowUp = [...this.followUpQueue];
-		this.steerQueue = [];
-		this.followUpQueue = [];
+		const { clearedSteer, clearedFollowUp } = this.queues.clearForAbort();
 		this.runAbortController?.abort();
 		const errors: Error[] = [];
 		try {
@@ -678,16 +371,21 @@ export class AgentHarness<
 		return { clearedSteer, clearedFollowUp };
 	}
 
-	async waitForIdle(): Promise<void> {
+	private async waitForIdle(): Promise<void> {
 		await this.runPromise;
 	}
 
+	// TODO(api-audit): `subscribe`/`on` are kept public for now, but the plan is
+	// to make them private. External consumers must not attach hooks that mutate
+	// internal flow; when a caller needs data out, expose a purpose-built,
+	// narrow read-only interface on AgentHarness instead of the full event bus.
 	subscribe(
 		listener: (event: AgentNotificationEvent<TSkill, TPromptTemplate>, signal?: AbortSignal) => Promise<void> | void,
 	): () => void {
 		return this.events.subscribe(listener);
 	}
 
+	// TODO(api-audit): planned to become private (see note on `subscribe`).
 	on<TType extends keyof AgentHookEventResultMap>(
 		type: TType,
 		handler: (

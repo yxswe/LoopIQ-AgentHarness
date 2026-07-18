@@ -1,23 +1,9 @@
-import type {
-	AssistantMessageEvent,
-	ImageContent,
-	Model,
-	TextContent,
-	ToolResultMessage,
-} from "@loopiq/ai";
+import type { AssistantMessageEvent, ImageContent, Model, TextContent, ToolResultMessage } from "@loopiq/ai";
 
 import type { AgentMessage } from "./messages.ts";
+import type { AgentHarnessStreamOptions, AgentHarnessStreamOptionsPatch, ThinkingLevel } from "./options.ts";
 import type { AgentHarnessResources, PromptTemplate, Skill } from "./resource.ts";
-import type {
-	ThinkingLevel,
-	AgentHarnessStreamOptions,
-	AgentHarnessStreamOptionsPatch,
-} from "./options.ts";
-import type {
-    CompactionEntry,
-	CompactionPreparation,
-	SessionTreeEntry,
-} from "./session-types.ts"
+import type { CompactionEntry, CompactionPreparation, SessionEntry } from "./session-types.ts";
 
 export interface QueueUpdateEvent {
 	type: "queue_update";
@@ -97,7 +83,7 @@ export interface ToolResultEvent {
 export interface SessionBeforeCompactEvent {
 	type: "session_before_compact";
 	preparation: CompactionPreparation;
-	branchEntries: SessionTreeEntry[];
+	entries: SessionEntry[];
 	customInstructions?: string;
 	signal: AbortSignal;
 }
@@ -191,10 +177,7 @@ export type AgentNotificationEvent<
  * consumed by the harness (see {@link AgentHookEventResultMap}). Unlike
  * {@link AgentNotificationEvent}s, these are NOT broadcast to `subscribe()`.
  */
-export type AgentHookEvent<
-	TSkill extends Skill = Skill,
-	TPromptTemplate extends PromptTemplate = PromptTemplate,
-> =
+export type AgentHookEvent<TSkill extends Skill = Skill, TPromptTemplate extends PromptTemplate = PromptTemplate> =
 	| BeforeAgentStartEvent<TSkill, TPromptTemplate>
 	| ContextEvent
 	| BeforeProviderRequestEvent
@@ -268,11 +251,9 @@ export type AgentHookEventResultMap = {
  * (`context`, `tool_call`, `tool_result`) through the same `on(type)` handlers
  * as every other hook, instead of via bespoke config callbacks.
  */
-export interface AgentHookEmitter {
-	<TType extends keyof AgentHookEventResultMap>(
-		event: Extract<AgentHookEvent, { type: TType }>,
-	): Promise<AgentHookEventResultMap[TType] | undefined>;
-}
+export type AgentHookEmitter = <TType extends keyof AgentHookEventResultMap>(
+	event: Extract<AgentHookEvent, { type: TType }>,
+) => Promise<AgentHookEventResultMap[TType] | undefined>;
 
 /**
  * The agent loop only ever emits {@link AgentRunEvent}s into the harness
