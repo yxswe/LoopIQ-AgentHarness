@@ -5,7 +5,7 @@
 	"workspaces": ["packages/*"],
 	"scripts": {
 		"clean": "npm run clean --workspaces --if-present",
-		"build": "cd packages/ai && npm run build && cd ../agent && npm run build",
+		"build": "npm run build -w @loopiq/ai && npm run build -w @loopiq/agent-core && npm run build -w @loopiq/cli",
 		"test": "npm run test --workspaces --if-present",
 		"check": "biome check --write .",
 		"presmoke": "npm run build",

@@ -69,6 +69,7 @@ export type AgentHarnessErrorCode =
 	| "session"
 	| "hook"
 	| "auth"
+	| "session_locked"
 	| "compaction"
 	| "unknown";
 

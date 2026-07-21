@@ -293,6 +293,7 @@ async function finalizeExecutedToolCall(
 			content: result.content,
 			details: result.details,
 			isError,
+			terminate: result.terminate,
 		});
 		if (patch) {
 			result = {

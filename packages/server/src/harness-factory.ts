@@ -1,5 +1,12 @@
 import { join } from "node:path";
-import { AgentHarness, createDefaultTools, NodeExecutionEnv } from "@loopiq/agent-core";
+import {
+	AgentHarness,
+	type AgentSession,
+	createDefaultTools,
+	createNodeSessionHost,
+	NodeExecutionEnv,
+	type NodeSessionHost,
+} from "@loopiq/agent-core";
 import { createModels } from "@loopiq/ai";
 import { githubCopilotProvider } from "@loopiq/ai/providers/github-copilot";
 import { ensureCopilotCredential } from "./copilot-auth.ts";
@@ -18,7 +25,13 @@ export interface CreateDevHarnessOptions {
 	modelId: string;
 }
 
-export async function createDefaultHarness(options: CreateDevHarnessOptions): Promise<DevHarness> {
+export interface DevRuntime {
+	host: NodeSessionHost;
+	defaultSession: AgentSession;
+	modelId: string;
+}
+
+async function createModelsAndModel(options: CreateDevHarnessOptions) {
 	const store = new FileCredentialStore(join(options.dataDir, "credentials.json"));
 	await ensureCopilotCredential(store);
 
@@ -27,19 +40,23 @@ export async function createDefaultHarness(options: CreateDevHarnessOptions): Pr
 
 	let model = models.getModel(PROVIDER_ID, options.modelId);
 	if (!model) {
-		// Builtin lists may need a refresh to populate; retry once.
 		await models.refresh(PROVIDER_ID);
 		model = models.getModel(PROVIDER_ID, options.modelId);
 	}
 	if (!model) {
 		const available = models
 			.getModels(PROVIDER_ID)
-			.map((m) => m.id)
+			.map((candidate) => candidate.id)
 			.join(", ");
 		throw new Error(
 			`Model "${options.modelId}" not found for provider "${PROVIDER_ID}". Available: ${available || "(none)"}`,
 		);
 	}
+	return { models, model };
+}
+
+export async function createDefaultHarness(options: CreateDevHarnessOptions): Promise<DevHarness> {
+	const { models, model } = await createModelsAndModel(options);
 
 	const harness = await AgentHarness.create({
 		cwd: options.cwd,
@@ -51,4 +68,23 @@ export async function createDefaultHarness(options: CreateDevHarnessOptions): Pr
 	});
 
 	return { harness, modelId: model.id };
+}
+
+export async function createDefaultRuntime(options: CreateDevHarnessOptions): Promise<DevRuntime> {
+	const { models, model } = await createModelsAndModel(options);
+	const host = createNodeSessionHost({
+		dataDir: options.dataDir,
+		models,
+		defaultModel: { providerId: model.provider, modelId: model.id },
+		systemPrompt: "You are a helpful assistant running inside the AgentHarness devui.",
+		createTools: (env) => createDefaultTools(env),
+	});
+	const existing = await host.list();
+	const defaultSession = existing[0]
+		? await host.open(existing[0].id)
+		: await host.create({
+				cwd: options.cwd,
+				model: { providerId: model.provider, modelId: model.id },
+			});
+	return { host, defaultSession, modelId: model.id };
 }
