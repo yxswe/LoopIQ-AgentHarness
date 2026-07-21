@@ -1,0 +1,26 @@
+{
+	"name": "@loopiq/cli",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"bin": {
+		"loopiq": "./dist/cli.js"
+	},
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.json",
+		"test": "vitest --run --passWithNoTests"
+	},
+	"dependencies": {
+		"@loopiq/agent-core": "*",
+		"@loopiq/ai": "*"
+	},
+	"devDependencies": {
+		"@types/node": "24.12.4",
+		"typescript": "5.9.3",
+		"vitest": "4.1.9"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	}
+}

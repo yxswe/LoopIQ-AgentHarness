@@ -78,6 +78,7 @@ export interface ToolResultEvent {
 	content: Array<TextContent | ImageContent>;
 	details: unknown;
 	isError: boolean;
+	terminate?: boolean;
 }
 
 export interface SessionBeforeCompactEvent {
@@ -151,9 +152,9 @@ export type AgentRunEvent =
  * Read-only notification events: agent-run lifecycle plus harness state changes.
  *
  * These are broadcast to `subscribe()` listeners and carry no return-value
- * semantics. `agent_end` is the last event emitted for a run, but awaited
- * `subscribe()` listeners for that event are still part of run settlement; the
- * agent becomes idle only after those listeners finish.
+ * semantics. `agent_end` is the final engine-loop event; Session settlement
+ * notifications follow it. Awaited listeners remain part of settlement, and
+ * the Session becomes idle only after terminal listeners finish.
  */
 export type AgentNotificationEvent<
 	TSkill extends Skill = Skill,

@@ -59,10 +59,7 @@ Every following non-empty line is one `SessionEntry`. Entries contain a unique
 
 ```ts
 type SessionEntry =
-  | MessageEntry
-  | CompactionEntry
-  | CustomEntry
-  | CustomMessageEntry;
+  MessageEntry | CompactionEntry | CustomEntry | CustomMessageEntry;
 ```
 
 ### `message`
@@ -79,6 +76,11 @@ changes how `buildSessionContext()` interprets the linear history.
 ### `custom`
 
 Stores extension data that is not inserted into model context.
+
+The Node Session runtime reserves `customType: "loopiq.session_config.v1"` for
+complete model, thinking-level, and active-tool snapshots. The latest valid
+snapshot is restored on open. It remains non-model-visible and does not alter
+the version 4 ordering model.
 
 ### `custom_message`
 
@@ -104,9 +106,10 @@ appending:
 An append writes the JSONL line before updating the in-memory entry list. A
 failed write therefore does not expose an entry that was not persisted.
 
-## Open-or-Create Behavior
+## Construction and Hosting
 
-`AgentHarness.create({ cwd, sessionPath, ... })` owns Session construction:
+The compatibility `AgentHarness.create({ cwd, sessionPath, ... })` retains the
+original open-or-create path:
 
 1. Build a `NodeExecutionEnv` from `cwd`.
 2. Check whether `sessionPath` exists.
@@ -117,6 +120,21 @@ failed write therefore does not expose an entry that was not persisted.
 Only an actual missing path triggers creation. Permission, file-type, and other
 filesystem failures are propagated and must never cause an existing file to be
 overwritten.
+
+New server/CLI code uses `NodeSessionHost` with this durable layout:
+
+```text
+<dataDir>/sessions/<sessionId>/
+  session.jsonl
+  runtime.lock
+```
+
+The host reads and validates the header before constructing the resumed
+`NodeExecutionEnv`; persisted `cwd` is authoritative. Loaded Sessions are
+single-flighted in-process. An exclusive `runtime.lock` file prevents a second
+process from opening the same Session for writes. The lease is released on
+close or shutdown. This protects only one Session log and does not coordinate
+different Sessions sharing a working directory.
 
 ## Context Reconstruction
 
@@ -147,6 +165,10 @@ not a parent or branch pointer.
 - `src/session/session-writer.ts` serially flushes buffered writes.
 - `src/session/storage-utils.ts` contains storage error conversion and the
   storage-to-Session adapter.
+- `src/runtime/agent-session.ts` owns the live single-active-run state around a
+  raw Session.
+- `src/node/node-session-host.ts` owns discovery, loaded instances, config
+  restore, and lifecycle; `node-session-lease.ts` owns writer exclusion.
 - `src/context/compaction/` computes and generates compaction summaries over the
   ordered Session entries.
 

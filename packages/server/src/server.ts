@@ -1,55 +1,83 @@
 /// <reference types="bun-types" />
 import { join, resolve } from "node:path";
-import { createDefaultHarness } from "./harness-factory.ts";
+import type { AgentEventEnvelope, AgentSession, ModelReference } from "@loopiq/agent-core";
+import { AgentHarnessError } from "@loopiq/agent-core";
+import { createDefaultRuntime } from "./harness-factory.ts";
 
 const PORT = Number(process.env.DEVUI_PORT ?? 4100);
 const MODEL_ID = process.env.DEVUI_MODEL ?? "claude-opus-4.6";
-// import.meta.dir = packages/server/src
 const CWD = process.env.DEVUI_CWD ?? resolve(import.meta.dir, "../../..");
 const DATA_DIR = resolve(import.meta.dir, "../.data");
 const STATIC_DIR = process.env.DEVUI_STATIC_DIR ?? resolve(import.meta.dir, "../../devui/public");
 
 const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
-	"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+	"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 	"Access-Control-Allow-Headers": "Content-Type",
 };
+const JSON_HEADERS = { "Content-Type": "application/json", ...CORS_HEADERS };
+const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key)$/i;
 
-// --- Build the single harness instance up front ---
-const { harness, modelId } = await createDefaultHarness({ dataDir: DATA_DIR, cwd: CWD, modelId: MODEL_ID });
-
-// --- SSE broadcast to all connected clients ---
+const { host, defaultSession, modelId } = await createDefaultRuntime({
+	dataDir: DATA_DIR,
+	cwd: CWD,
+	modelId: MODEL_ID,
+});
 const encoder = new TextEncoder();
-const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
 
-function broadcast(payload: unknown): void {
-	const frame = encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
-	for (const controller of clients) {
-		try {
-			controller.enqueue(frame);
-		} catch {
-			clients.delete(controller);
-		}
-	}
+function json(value: unknown, status = 200): Response {
+	return new Response(JSON.stringify(value), { status, headers: JSON_HEADERS });
 }
 
-// One global subscription: every notification event goes to every client.
-harness.subscribe((event) => {
-	broadcast(event);
-});
+function safeEnvelope(envelope: AgentEventEnvelope): AgentEventEnvelope {
+	if (envelope.event.type !== "after_provider_response") return envelope;
+	return {
+		...envelope,
+		event: {
+			...envelope.event,
+			headers: Object.fromEntries(
+				Object.entries(envelope.event.headers).map(([name, value]) => [
+					name,
+					SENSITIVE_HEADER.test(name) ? "[redacted]" : value,
+				]),
+			),
+		},
+	};
+}
 
-function sseResponse(): Response {
-	let self: ReadableStreamDefaultController<Uint8Array>;
-	const stream = new ReadableStream<Uint8Array>({
-		start(controller) {
-			self = controller;
-			clients.add(controller);
-			controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "server_ready", modelId })}\n\n`));
+function sseResponse(session: AgentSession, legacy = false): Response {
+	let unsubscribe = () => {};
+	const stream = new ReadableStream<Uint8Array>(
+		{
+			start(controller) {
+				let closed = false;
+				const close = () => {
+					if (closed) return;
+					closed = true;
+					unsubscribe();
+					controller.close();
+				};
+				unsubscribe = session.subscribe((rawEnvelope) => {
+					if (closed) return;
+					if ((controller.desiredSize ?? 1) <= 0) {
+						close();
+						return;
+					}
+					const envelope = safeEnvelope(rawEnvelope);
+					const payload = legacy ? envelope.event : envelope;
+					controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+				});
+				const ready = legacy
+					? { type: "server_ready", modelId }
+					: { type: "server_ready", modelId, sessionId: session.id };
+				controller.enqueue(encoder.encode(`data: ${JSON.stringify(ready)}\n\n`));
+			},
+			cancel() {
+				unsubscribe();
+			},
 		},
-		cancel() {
-			clients.delete(self);
-		},
-	});
+		{ highWaterMark: 256 },
+	);
 	return new Response(stream, {
 		headers: {
 			"Content-Type": "text/event-stream",
@@ -60,9 +88,25 @@ function sseResponse(): Response {
 	});
 }
 
+function errorResponse(error: unknown): Response {
+	if (error instanceof AgentHarnessError) {
+		const status =
+			error.code === "busy" || error.code === "invalid_state" ? 409 : error.code === "session_locked" ? 423 : 400;
+		return json({ error: error.message, code: error.code }, status);
+	}
+	return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+}
+
+function parseModelReference(value: unknown): ModelReference | undefined {
+	if (typeof value !== "string") return undefined;
+	const separator = value.indexOf("/");
+	if (separator <= 0 || separator === value.length - 1) return undefined;
+	return { providerId: value.slice(0, separator), modelId: value.slice(separator + 1) };
+}
+
 async function serveStatic(pathname: string): Promise<Response> {
-	const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-	const file = Bun.file(join(STATIC_DIR, rel));
+	const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+	const file = Bun.file(join(STATIC_DIR, relative));
 	if (await file.exists()) return new Response(file);
 	return new Response("Not found", { status: 404 });
 }
@@ -70,52 +114,85 @@ async function serveStatic(pathname: string): Promise<Response> {
 Bun.serve({
 	port: PORT,
 	async fetch(request) {
-		const url = new URL(request.url);
+		try {
+			const url = new URL(request.url);
+			if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
 
-		if (request.method === "OPTIONS") {
-			return new Response(null, { status: 204, headers: CORS_HEADERS });
-		}
-
-		if (url.pathname === "/api/events" && request.method === "GET") {
-			return sseResponse();
-		}
-
-		if (url.pathname === "/api/prompt" && request.method === "POST") {
-			const body = (await request.json().catch(() => null)) as { text?: unknown } | null;
-			if (!body || typeof body.text !== "string" || body.text.trim() === "") {
-				return new Response(JSON.stringify({ error: "text (non-empty string) required" }), {
-					status: 400,
-					headers: { "Content-Type": "application/json", ...CORS_HEADERS },
-				});
+			if (url.pathname === "/api/events" && request.method === "GET") return sseResponse(defaultSession, true);
+			if (url.pathname === "/api/prompt" && request.method === "POST") {
+				const body = (await request.json().catch(() => null)) as { text?: unknown } | null;
+				if (!body || typeof body.text !== "string" || !body.text.trim())
+					return json({ error: "text required" }, 400);
+				const snapshot = defaultSession.getSnapshot();
+				if (snapshot.state === "idle") {
+					const handle = defaultSession.startRun({ text: body.text });
+					return json({ status: "accepted", sessionId: defaultSession.id, runId: handle.runId }, 202);
+				}
+				if (!snapshot.currentRunId) throw new AgentHarnessError("invalid_state", "Session has no active run");
+				await defaultSession.steer(snapshot.currentRunId, { text: body.text });
+				return json({ status: "steered", sessionId: defaultSession.id, runId: snapshot.currentRunId }, 202);
 			}
-			const text = body.text;
-			// Fire and forget: assistant output + lifecycle events flow over SSE.
-			// `send` routes by phase: idle -> new turn, busy -> steer the running turn.
-			harness.send(text).catch((error) => {
-				broadcast({ type: "server_error", message: error instanceof Error ? error.message : String(error) });
-			});
-			return new Response(JSON.stringify({ status: "accepted" }), {
-				status: 202,
-				headers: { "Content-Type": "application/json", ...CORS_HEADERS },
-			});
-		}
+			if (url.pathname === "/api/abort" && request.method === "POST") {
+				return json(await defaultSession.abortCurrent());
+			}
 
-		if (url.pathname === "/api/abort" && request.method === "POST") {
-			const result = await harness.abort();
-			return new Response(JSON.stringify(result), {
-				status: 200,
-				headers: { "Content-Type": "application/json", ...CORS_HEADERS },
-			});
-		}
+			if (url.pathname === "/api/sessions" && request.method === "GET") return json(await host.list());
+			if (url.pathname === "/api/sessions" && request.method === "POST") {
+				const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+				const session = await host.create({
+					cwd: typeof body.cwd === "string" ? body.cwd : CWD,
+					model: parseModelReference(body.model),
+					thinkingLevel: typeof body.thinkingLevel === "string" ? (body.thinkingLevel as never) : undefined,
+				});
+				return json(session.getSnapshot(), 201);
+			}
 
-		return serveStatic(url.pathname);
+			const eventsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/events$/);
+			if (eventsMatch && request.method === "GET") return sseResponse(await host.open(eventsMatch[1]!));
+			const runMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs$/);
+			if (runMatch && request.method === "POST") {
+				const body = (await request.json().catch(() => null)) as { text?: unknown } | null;
+				if (!body || typeof body.text !== "string" || !body.text.trim())
+					return json({ error: "text required" }, 400);
+				const session = await host.open(runMatch[1]!);
+				const handle = session.startRun({ text: body.text });
+				return json({ sessionId: handle.sessionId, runId: handle.runId }, 202);
+			}
+			const steerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/steer$/);
+			if (steerMatch && request.method === "POST") {
+				const body = (await request.json().catch(() => null)) as {
+					text?: unknown;
+					interruptCurrentInference?: unknown;
+				} | null;
+				if (!body || typeof body.text !== "string" || !body.text.trim())
+					return json({ error: "text required" }, 400);
+				const session = await host.open(steerMatch[1]!);
+				await session.steer(
+					steerMatch[2]!,
+					{ text: body.text },
+					{ interruptCurrentInference: body.interruptCurrentInference === true },
+				);
+				return json({ status: "accepted" }, 202);
+			}
+			const abortMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/abort$/);
+			if (abortMatch && request.method === "POST") {
+				return json(await (await host.open(abortMatch[1]!)).abort(abortMatch[2]!));
+			}
+			const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+			if (sessionMatch && request.method === "GET") return json((await host.open(sessionMatch[1]!)).getSnapshot());
+			if (sessionMatch && request.method === "DELETE") {
+				if (sessionMatch[1] === defaultSession.id)
+					return json({ error: "Cannot delete the DevUI default Session" }, 409);
+				await host.delete(sessionMatch[1]!);
+				return new Response(null, { status: 204, headers: CORS_HEADERS });
+			}
+
+			return serveStatic(url.pathname);
+		} catch (error) {
+			return errorResponse(error);
+		}
 	},
-	error(err) {
-		return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), {
-			status: 500,
-			headers: { "Content-Type": "application/json", ...CORS_HEADERS },
-		});
-	},
+	error: errorResponse,
 });
 
-console.log(`[devui] server on http://localhost:${PORT} (model: ${modelId})`);
+console.log(`[devui] server on http://localhost:${PORT} (model: ${modelId}, session: ${defaultSession.id})`);

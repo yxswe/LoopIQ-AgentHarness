@@ -48,8 +48,43 @@ export type { Result } from "./base/types.ts";
 // Error classes (exported as values for `instanceof` checks) and Result type
 export { AgentHarnessError, CompactionError, SessionError } from "./base/types.ts";
 export { AgentHarness } from "./core/agent-harness.ts";
+export { type AgentEngine, type AgentEngineDependencies, createAgentEngine } from "./engine/agent-engine.ts";
+export type { AgentRunInput, AgentUserInput } from "./engine/agent-run.ts";
+export type {
+	AgentRunController,
+	AgentRunControlView,
+	InferenceInterruptReason,
+	InferenceScope,
+} from "./engine/agent-run-control.ts";
+export type { AgentRunOutcome } from "./engine/agent-run-outcome.ts";
+export type { AgentEngineEvent, AgentRunPort } from "./engine/agent-run-port.ts";
 // Node execution environment (concrete backend used to build tools).
 export { NodeExecutionEnv } from "./env/nodejs.ts";
+export {
+	createNodeSessionHost,
+	NodeSessionHost,
+	type NodeSessionHostOptions,
+} from "./node/node-session-host.ts";
+export {
+	type AgentRunHandle,
+	type AgentRunResult,
+	AgentSession,
+	type AgentSessionSnapshot,
+	type AgentSessionState,
+	type AgentSteerOptions,
+} from "./runtime/agent-session.ts";
+export type {
+	AgentEventEnvelope,
+	AgentEventListener,
+	RunSettledEvent,
+	SerializedRunError,
+} from "./runtime/event-envelope.ts";
+export {
+	type ModelReference,
+	type PersistedSessionConfigV1,
+	SESSION_CONFIG_CUSTOM_TYPE,
+} from "./runtime/persisted-session-config.ts";
+export type { CreateSessionOptions, SessionHost, SessionSummary } from "./runtime/session-host.ts";
 // Built-in tools and the default tool-set factory.
 export {
 	type BashToolDetails,

@@ -1,8 +1,7 @@
-import type { Model } from "@loopiq/ai";
-
 import type { AgentHookEvent, AgentHookEventResultMap, AgentNotificationEvent } from "../base/events.ts";
 import type { PromptTemplate, Skill } from "../base/resource.ts";
 import { normalizeHookError } from "../base/types.ts";
+import { applyStreamOptionsPatch, cloneStreamOptions } from "./stream-options.ts";
 
 const SUBSCRIBER_EVENT_TYPE = "*";
 
@@ -20,7 +19,7 @@ type AgentHarnessHandler = (event: any, signal?: AbortSignal) => Promise<any> | 
 export class AgentEventBus<TSkill extends Skill = Skill, TPromptTemplate extends PromptTemplate = PromptTemplate> {
 	private handlers = new Map<string, Set<AgentHarnessHandler>>();
 
-	getHandlers(type: string): Set<AgentHarnessHandler> | undefined {
+	private getHandlers(type: string): Set<AgentHarnessHandler> | undefined {
 		return this.handlers.get(type);
 	}
 
@@ -66,34 +65,102 @@ export class AgentEventBus<TSkill extends Skill = Skill, TPromptTemplate extends
 	): Promise<AgentHookEventResultMap[TType] | undefined> {
 		const handlers = this.getHandlers(event.type as TType);
 		if (!handlers || handlers.size === 0) return undefined;
-		let lastResult: AgentHookEventResultMap[TType] | undefined;
-		for (const handler of handlers) {
-			try {
-				const result = await handler(event);
-				if (result !== undefined) {
-					lastResult = result;
+		// The public generic signature is fully typed. This local cast is needed
+		// because TypeScript cannot narrow an Extract union through a generic key.
+		const hookEvent = event as AgentHookEvent & Record<string, any>;
+		try {
+			switch (hookEvent.type) {
+				case "context": {
+					let messages = hookEvent.messages;
+					for (const handler of handlers) {
+						const result = await handler({ ...hookEvent, messages });
+						if (result?.messages) messages = result.messages;
+					}
+					return (messages === hookEvent.messages ? undefined : { messages }) as AgentHookEventResultMap[TType];
 				}
-			} catch (error) {
-				throw normalizeHookError(error);
-			}
-		}
-		return lastResult;
-	}
-
-	async emitBeforeProviderPayload(model: Model<any>, payload: unknown): Promise<unknown> {
-		const handlers = this.getHandlers("before_provider_payload");
-		let current = payload;
-		if (!handlers || handlers.size === 0) return current;
-		for (const handler of handlers) {
-			try {
-				const result = await handler({ type: "before_provider_payload", model, payload: current });
-				if (result !== undefined) {
-					current = result.payload;
+				case "before_agent_start": {
+					let systemPrompt = hookEvent.systemPrompt;
+					const messages = [];
+					for (const handler of handlers) {
+						const result = await handler({ ...hookEvent, systemPrompt });
+						if (result?.messages) messages.push(...result.messages);
+						if (result?.systemPrompt !== undefined) systemPrompt = result.systemPrompt;
+					}
+					return (
+						messages.length > 0 || systemPrompt !== hookEvent.systemPrompt
+							? { messages, systemPrompt }
+							: undefined
+					) as AgentHookEventResultMap[TType];
 				}
-			} catch (error) {
-				throw normalizeHookError(error);
+				case "before_provider_request": {
+					let streamOptions = cloneStreamOptions(hookEvent.streamOptions);
+					let changed = false;
+					for (const handler of handlers) {
+						const result = await handler({ ...hookEvent, streamOptions: cloneStreamOptions(streamOptions) });
+						if (result?.streamOptions) {
+							streamOptions = applyStreamOptionsPatch(streamOptions, result.streamOptions);
+							changed = true;
+						}
+					}
+					return (changed ? { streamOptions } : undefined) as AgentHookEventResultMap[TType];
+				}
+				case "before_provider_payload": {
+					let payload = hookEvent.payload;
+					let changed = false;
+					for (const handler of handlers) {
+						const result = await handler({ ...hookEvent, payload });
+						if (result !== undefined) {
+							payload = result.payload;
+							changed = true;
+						}
+					}
+					return (changed ? { payload } : undefined) as AgentHookEventResultMap[TType];
+				}
+				case "tool_call": {
+					for (const handler of handlers) {
+						const result = await handler(hookEvent);
+						if (result?.block) return result;
+					}
+					return undefined;
+				}
+				case "tool_result": {
+					let current = hookEvent;
+					let changed = false;
+					for (const handler of handlers) {
+						const result = await handler(current);
+						if (!result) continue;
+						current = {
+							...current,
+							content: result.content ?? current.content,
+							details: result.details ?? current.details,
+							isError: result.isError ?? current.isError,
+							terminate: result.terminate ?? current.terminate,
+						};
+						changed = true;
+					}
+					return (
+						changed
+							? {
+									content: current.content,
+									details: current.details,
+									isError: current.isError,
+									terminate: current.terminate,
+								}
+							: undefined
+					) as AgentHookEventResultMap[TType];
+				}
+				case "session_before_compact": {
+					let lastResult: AgentHookEventResultMap[TType] | undefined;
+					for (const handler of handlers) {
+						const result = await handler(hookEvent);
+						if (result !== undefined) lastResult = result;
+						if (result?.cancel) return result;
+					}
+					return lastResult;
+				}
 			}
+		} catch (error) {
+			throw normalizeHookError(error);
 		}
-		return current;
 	}
 }
