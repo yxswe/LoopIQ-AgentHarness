@@ -16,7 +16,16 @@ describe("CLI argument parsing", () => {
 	});
 
 	it("parses Session management commands", () => {
-		expect(parseArgs(["sessions", "delete", "session-id"]).deleteSessionId).toBe("session-id");
+		expect(parseArgs(["sessions", "delete", "session-id"]).target).toBe("session-id");
 		expect(parseArgs(["sessions", "list", "--format", "json"]).command).toBe("sessions-list");
+	});
+
+	it("parses provider and configuration commands", () => {
+		expect(parseArgs(["providers", "add", "anthropic", "--auth-method", "oauth"])).toMatchObject({
+			command: "providers-add",
+			target: "anthropic",
+			authMethod: "oauth",
+		});
+		expect(parseArgs(["config", "set-model", "openai/gpt-4.1"]).target).toBe("openai/gpt-4.1");
 	});
 });

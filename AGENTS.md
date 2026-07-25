@@ -16,6 +16,12 @@
 - `docs/architect.md` should remain the high-level map and link to the relevant
   detailed subsystem document instead of duplicating its full specification.
 
+# Repository Boundaries
+
+- `packages/ai` is an externally sourced dependency and MUST be treated as
+  read-only. NEVER modify code or other files inside `packages/ai`; implement
+  integrations or adaptations in consuming packages instead.
+
 # Language Rules
 
 - All conversational responses to the user MUST be written in Chinese.
@@ -29,18 +35,18 @@
 
 ## devui-control
 
-Drive the running devui AgentHarness server from the command line, the same way a
-human drives the browser devui. It talks to the single shared session, so anything
-you send also appears on the browser devui as a user message, and you observe the
-exact same event/debug stream a human sees.
+Drive the running devui agent runtime from the command line, the same way a human
+drives the browser devui. It discovers the browser Session and uses explicit
+Session/run identities, so anything you send also appears on the browser devui
+and you observe the same event/debug stream.
 
 - **Hard dependency:** the devui server must be running. Start it from the repo
   root with `npm run devui` (package `packages/server`). Every command is just an
   HTTP/SSE client and does nothing on its own; if the server is down, commands
   fail fast with a connection error and exit non-zero.
 - **Usage:** `node .github/agent-tools/devui-control/devctl.mjs <send|abort|watch> [args]`
-  - `send "<prompt>"` — submit a prompt and block until the turn settles, then
+  - `send "<prompt>"` — submit a prompt and block until the run settles, then
     print the assistant's final reply.
-  - `abort` — stop the current turn (same as the devui Abort button).
+  - `abort` — stop the current run (same as the devui Abort button).
   - `watch` — stream the live event/debug feed until interrupted.
 - **Full documentation:** see `.github/agent-tools/devui-control/README.md`.

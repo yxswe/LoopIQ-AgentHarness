@@ -1,12 +1,8 @@
 // Minimal DevUI client: observe the SSE event stream and POST actions.
 // Zero third-party dependencies; runs on Node 22+ or Bun (global fetch + web streams).
 //
-// The devui server (packages/server) exposes a single shared AgentHarness over:
-//   GET  /api/events  -> SSE broadcast of every AgentNotificationEvent (+ server_ready/server_error)
-//   POST /api/prompt  -> { text }  (fire-and-forget; output flows over SSE)
-//   POST /api/abort   -> abort the running turn
-// This client is the agent-facing counterpart to the browser devui: it drives and
-// observes the *same* shared session, so anything the skill sends also shows up on devui.
+// The client discovers the browser devui's Session through /api/runtime, then
+// uses only Session-scoped run, steer, abort, and event endpoints.
 
 const DEFAULT_URL = process.env.DEVUI_URL || `http://localhost:${process.env.DEVUI_PORT || 4100}`;
 
@@ -24,12 +20,24 @@ export function post(path, body) {
 	});
 }
 
+export async function runtime() {
+	const response = await fetch(baseUrl() + "/api/runtime");
+	if (!response.ok) throw new Error(`runtime discovery failed: ${response.status}`);
+	return response.json();
+}
+
+export async function sessionSnapshot(sessionId) {
+	const response = await fetch(baseUrl() + `/api/sessions/${encodeURIComponent(sessionId)}`);
+	if (!response.ok) throw new Error(`session discovery failed: ${response.status}`);
+	return response.json();
+}
+
 /**
  * Open the SSE stream and yield parsed events until the signal aborts or the
  * connection closes. The first yielded event is normally `server_ready`.
  */
-export async function* events(signal) {
-	const res = await fetch(baseUrl() + "/api/events", {
+export async function* events(sessionId, signal) {
+	const res = await fetch(baseUrl() + `/api/sessions/${encodeURIComponent(sessionId)}/events`, {
 		headers: { Accept: "text/event-stream" },
 		signal,
 	});

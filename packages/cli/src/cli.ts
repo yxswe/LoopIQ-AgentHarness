@@ -1,27 +1,48 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { stdin, stdout } from "node:process";
+import { stderr, stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { pathToFileURL } from "node:url";
-import type { AgentEventEnvelope, AgentRunResult, AgentSession, ThinkingLevel } from "@loopiq/agent-core";
-import { AgentHarnessError } from "@loopiq/agent-core";
-import { createDefaultRuntime } from "./default-runtime.ts";
+import {
+	type Agent,
+	type AgentEventEnvelope,
+	AgentRuntimeError,
+	createAgent,
+	type ModelReference,
+	type ProviderLoginInteraction,
+	type RunResult,
+	type SessionSnapshot,
+	type ThinkingLevel,
+} from "@loopiq/agent";
 
 type OutputFormat = "text" | "json" | "jsonl";
+type Command =
+	| "run"
+	| "chat"
+	| "sessions-list"
+	| "sessions-create"
+	| "sessions-delete"
+	| "providers-list"
+	| "providers-add"
+	| "providers-remove"
+	| "models-list"
+	| "config-get"
+	| "config-set-model";
 
 interface ParsedOptions {
-	command: "run" | "chat" | "sessions-list" | "sessions-create" | "sessions-delete";
+	command: Command;
 	prompt?: string;
 	sessionId?: string;
 	newSession: boolean;
 	cwd: string;
-	model: string;
+	model?: string;
 	thinking?: ThinkingLevel;
 	format: OutputFormat;
 	stdin: boolean;
 	dataDir: string;
-	deleteSessionId?: string;
+	target?: string;
+	authMethod?: "api_token" | "oauth";
 }
 
 function takeValue(args: string[], index: number, name: string): string {
@@ -31,28 +52,62 @@ function takeValue(args: string[], index: number, name: string): string {
 	return value;
 }
 
+function takeTarget(args: string[], message: string): string {
+	const target = args.shift();
+	if (!target || target.startsWith("--")) throw new Error(message);
+	return target;
+}
+
 export function parseArgs(argv: string[]): ParsedOptions {
 	const args = [...argv];
-	let command: ParsedOptions["command"] = "run";
-	if (args[0] === "chat") {
-		command = "chat";
+	let command: Command = "run";
+	let target: string | undefined;
+	const group = args[0];
+	if (group === "chat" || group === "run") {
+		command = group;
 		args.shift();
-	} else if (args[0] === "run") {
-		args.shift();
-	} else if (args[0] === "sessions") {
+	} else if (group === "sessions") {
 		args.shift();
 		const action = args.shift();
 		if (action === "list") command = "sessions-list";
 		else if (action === "create") command = "sessions-create";
-		else if (action === "delete") command = "sessions-delete";
-		else throw new Error("sessions requires list, create, or delete");
+		else if (action === "delete") {
+			command = "sessions-delete";
+			target = takeTarget(args, "sessions delete requires a Session ID");
+		} else throw new Error("sessions requires list, create, or delete");
+	} else if (group === "providers") {
+		args.shift();
+		const action = args.shift();
+		if (action === "list") command = "providers-list";
+		else if (action === "add") {
+			command = "providers-add";
+			target = takeTarget(args, "providers add requires a Provider ID");
+		} else if (action === "remove") {
+			command = "providers-remove";
+			target = takeTarget(args, "providers remove requires a Provider ID");
+		} else throw new Error("providers requires list, add, or remove");
+	} else if (group === "models") {
+		args.shift();
+		const action = args.shift();
+		if (action !== "list") throw new Error("models requires list");
+		command = "models-list";
+		if (args[0] && !args[0].startsWith("--")) target = args.shift();
+	} else if (group === "config") {
+		args.shift();
+		const action = args.shift();
+		if (action === "get") command = "config-get";
+		else if (action === "set-model") {
+			command = "config-set-model";
+			target = takeTarget(args, "config set-model requires provider/model");
+		} else throw new Error("config requires get or set-model");
 	}
 
 	const options: ParsedOptions = {
 		command,
+		target,
 		newSession: false,
 		cwd: process.cwd(),
-		model: process.env.LOOPIQ_MODEL ?? "github-copilot/claude-opus-4.6",
+		model: process.env.LOOPIQ_MODEL,
 		format: "text",
 		stdin: false,
 		dataDir: process.env.LOOPIQ_DATA_DIR ?? resolve(homedir(), ".loopiq"),
@@ -68,18 +123,28 @@ export function parseArgs(argv: string[]): ParsedOptions {
 		else if (argument === "--thinking") options.thinking = takeValue(args, index, argument) as ThinkingLevel;
 		else if (argument === "--format") options.format = takeValue(args, index, argument) as OutputFormat;
 		else if (argument === "--data-dir") options.dataDir = resolve(takeValue(args, index, argument));
-		else if (argument === "--stdin") {
+		else if (argument === "--auth-method") {
+			options.authMethod = takeValue(args, index, argument) as "api_token" | "oauth";
+		} else if (argument === "--stdin") {
 			options.stdin = true;
 			args.splice(index, 1);
 		} else if (argument.startsWith("--")) throw new Error(`Unknown option ${argument}`);
 		else index++;
 	}
 	if (!(["text", "json", "jsonl"] as string[]).includes(options.format)) throw new Error("Invalid output format");
+	if (options.authMethod && options.authMethod !== "api_token" && options.authMethod !== "oauth") {
+		throw new Error("--auth-method must be api_token or oauth");
+	}
 	if (options.sessionId && options.newSession) throw new Error("--session and --new are mutually exclusive");
 	if (options.stdin && args.length > 0) throw new Error("prompt argument and --stdin are mutually exclusive");
-	if (command === "sessions-delete") options.deleteSessionId = args.shift();
-	else options.prompt = args.join(" ") || undefined;
+	if (command === "run" || command === "chat") options.prompt = args.join(" ") || undefined;
 	return options;
+}
+
+function parseModelReference(value: string): ModelReference {
+	const separator = value.indexOf("/");
+	if (separator <= 0 || separator === value.length - 1) throw new Error("Model must use provider/model format");
+	return { providerId: value.slice(0, separator), modelId: value.slice(separator + 1) };
 }
 
 async function readStdin(): Promise<string> {
@@ -104,9 +169,9 @@ function safeEnvelope(envelope: AgentEventEnvelope): AgentEventEnvelope {
 	};
 }
 
-function attachRenderer(session: AgentSession, format: OutputFormat): () => void {
+async function attachRenderer(agent: Agent, sessionId: string, format: OutputFormat): Promise<() => void> {
 	if (format === "json") return () => {};
-	return session.subscribe((rawEnvelope) => {
+	return agent.subscribe(sessionId, (rawEnvelope) => {
 		const envelope = safeEnvelope(rawEnvelope);
 		if (format === "jsonl") {
 			stdout.write(`${JSON.stringify(envelope)}\n`);
@@ -118,7 +183,7 @@ function attachRenderer(session: AgentSession, format: OutputFormat): () => void
 	});
 }
 
-function serializeResult(result: AgentRunResult) {
+function serializeResult(result: RunResult) {
 	return {
 		...result,
 		error: result.error
@@ -127,38 +192,40 @@ function serializeResult(result: AgentRunResult) {
 	};
 }
 
-async function selectSession(options: ParsedOptions, host: Awaited<ReturnType<typeof createDefaultRuntime>>["host"]) {
-	if (options.sessionId) return host.open(options.sessionId);
-	return host.create({
+async function selectSession(options: ParsedOptions, agent: Agent): Promise<SessionSnapshot> {
+	if (options.sessionId) return agent.getSession(options.sessionId);
+	return agent.createSession({
 		cwd: options.cwd,
-		model: (() => {
-			const separator = options.model.indexOf("/");
-			return { providerId: options.model.slice(0, separator), modelId: options.model.slice(separator + 1) };
-		})(),
+		model: options.model ? parseModelReference(options.model) : undefined,
 		thinkingLevel: options.thinking,
 	});
+}
+
+async function applySessionOverrides(options: ParsedOptions, agent: Agent, session: SessionSnapshot): Promise<void> {
+	if (options.sessionId && options.model) {
+		const model = parseModelReference(options.model);
+		if (session.model.providerId !== model.providerId || session.model.modelId !== model.modelId) {
+			await agent.updateSession(session.id, { model });
+		}
+	}
+	if (options.thinking && session.thinkingLevel !== options.thinking) {
+		await agent.updateSession(session.id, { thinkingLevel: options.thinking });
+	}
 }
 
 async function runOnce(options: ParsedOptions): Promise<number> {
 	const prompt = options.stdin ? await readStdin() : options.prompt;
 	if (!prompt?.trim()) throw new Error("A non-empty prompt or --stdin is required");
-	const runtime = await createDefaultRuntime(options.dataDir, options.model);
-	const session = await selectSession(options, runtime.host);
-	const unsubscribe = attachRenderer(session, options.format);
-	if (
-		options.sessionId &&
-		(session.getModel().provider !== runtime.model.provider || session.getModel().id !== runtime.model.id)
-	) {
-		await session.setModel(runtime.model);
-	}
-	if (options.thinking && session.getThinkingLevel() !== options.thinking)
-		await session.setThinkingLevel(options.thinking);
-	const handle = session.startRun({ text: prompt });
+	const agent = await createAgent({ dataDir: options.dataDir });
+	const session = await selectSession(options, agent);
+	const unsubscribe = await attachRenderer(agent, session.id, options.format);
+	await applySessionOverrides(options, agent, session);
+	const handle = await agent.run(session.id, { text: prompt });
 	let interrupted = false;
 	const onSignal = () => {
 		if (interrupted) process.exit(130);
 		interrupted = true;
-		void session.abort(handle.runId);
+		void agent.abort(session.id, handle.runId);
 	};
 	process.on("SIGINT", onSignal);
 	try {
@@ -169,20 +236,21 @@ async function runOnce(options: ParsedOptions): Promise<number> {
 	} finally {
 		process.off("SIGINT", onSignal);
 		unsubscribe();
-		await runtime.host.shutdown();
+		await agent.shutdown();
 	}
 }
 
 async function runChat(options: ParsedOptions): Promise<number> {
-	const runtime = await createDefaultRuntime(options.dataDir, options.model);
-	const session = await selectSession(options, runtime.host);
-	const unsubscribe = attachRenderer(session, options.format);
-	const readline = createInterface({ input: stdin, output: process.stderr });
+	const agent = await createAgent({ dataDir: options.dataDir });
+	const session = await selectSession(options, agent);
+	await applySessionOverrides(options, agent, session);
+	const unsubscribe = await attachRenderer(agent, session.id, options.format);
+	const readline = createInterface({ input: stdin, output: stderr });
 	try {
 		while (true) {
 			const input = await readline.question("> ");
 			if (!input || input === "/exit") break;
-			const result = await session.startRun({ text: input }).result;
+			const result = await (await agent.run(session.id, { text: input })).result;
 			if (options.format === "json") stdout.write(`${JSON.stringify(serializeResult(result))}\n`);
 			else if (options.format === "text") stdout.write("\n");
 		}
@@ -190,30 +258,125 @@ async function runChat(options: ParsedOptions): Promise<number> {
 	} finally {
 		readline.close();
 		unsubscribe();
-		await runtime.host.shutdown({ abortRunning: true });
+		await agent.shutdown({ abortRunning: true });
 	}
 }
 
-async function runSessionCommand(options: ParsedOptions): Promise<number> {
-	const runtime = await createDefaultRuntime(options.dataDir, options.model);
+function createTerminalInteraction(): ProviderLoginInteraction {
+	return {
+		async prompt(prompt) {
+			if (prompt.type === "secret") return readSecret(`${prompt.message} `, prompt.signal);
+			const readline = createInterface({ input: stdin, output: stderr });
+			try {
+				if (prompt.type === "select") {
+					for (const option of prompt.options) stderr.write(`${option.id}: ${option.label}\n`);
+				}
+				return readline.question(`${prompt.message} `, { signal: prompt.signal });
+			} finally {
+				readline.close();
+			}
+		},
+		notify(event) {
+			if (event.type === "auth_url") stderr.write(`${event.instructions ?? "Open"}: ${event.url}\n`);
+			else if (event.type === "device_code") {
+				stderr.write(`Open ${event.verificationUri} and enter code ${event.userCode}\n`);
+			} else stderr.write(`${event.message}\n`);
+		},
+	};
+}
+
+async function readSecret(message: string, signal?: AbortSignal): Promise<string> {
+	if (!stdin.isTTY || typeof stdin.setRawMode !== "function") {
+		const readline = createInterface({ input: stdin, output: stderr });
+		try {
+			return await readline.question(message, { signal });
+		} finally {
+			readline.close();
+		}
+	}
+
+	stderr.write(message);
+	const wasRaw = stdin.isRaw;
+	const wasPaused = stdin.isPaused();
+	return new Promise<string>((resolve, reject) => {
+		let value = "";
+		let settled = false;
+		const cleanup = () => {
+			stdin.off("data", onData);
+			signal?.removeEventListener("abort", onAbort);
+			if (!wasRaw) stdin.setRawMode(false);
+			if (wasPaused) stdin.pause();
+		};
+		const finish = (result: { value: string } | { error: Error }) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			stderr.write("\n");
+			if ("value" in result) resolve(result.value);
+			else reject(result.error);
+		};
+		const onAbort = () => finish({ error: new Error("Credential prompt canceled") });
+		const onData = (chunk: string | Buffer) => {
+			for (const character of chunk.toString()) {
+				if (character === "\r" || character === "\n") {
+					finish({ value });
+					return;
+				}
+				if (character === "\u0003") {
+					finish({ error: new Error("Credential prompt canceled") });
+					return;
+				}
+				if (character === "\b" || character === "\u007f") value = Array.from(value).slice(0, -1).join("");
+				else if (character >= " ") value += character;
+			}
+		};
+
+		stdin.setRawMode(true);
+		stdin.resume();
+		stdin.on("data", onData);
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (signal?.aborted) onAbort();
+	});
+}
+
+async function runManagementCommand(options: ParsedOptions): Promise<number> {
+	const agent = await createAgent({ dataDir: options.dataDir });
 	try {
-		if (options.command === "sessions-list") {
-			const sessions = await runtime.host.list();
-			if (options.format === "text") {
-				for (const session of sessions) stdout.write(`${session.id}\t${session.cwd}\t${session.loadedState}\n`);
-			} else stdout.write(`${JSON.stringify(sessions)}\n`);
-			return 0;
-		}
-		if (options.command === "sessions-create") {
-			const session = await selectSession({ ...options, sessionId: undefined }, runtime.host);
-			stdout.write(`${options.format === "text" ? session.id : JSON.stringify(session.getSnapshot())}\n`);
-			return 0;
-		}
-		if (!options.deleteSessionId) throw new Error("sessions delete requires a Session ID");
-		await runtime.host.delete(options.deleteSessionId);
+		let value: unknown;
+		if (options.command === "sessions-list") value = await agent.listSessions();
+		else if (options.command === "sessions-create") value = await selectSession(options, agent);
+		else if (options.command === "sessions-delete") {
+			await agent.deleteSession(options.target!);
+			value = { deleted: options.target };
+		} else if (options.command === "providers-list") {
+			value = await agent.listProviders({ validateCredentials: true });
+		} else if (options.command === "providers-add") {
+			const providers = await agent.listProviders();
+			const provider = providers.find((candidate) => candidate.providerId === options.target);
+			if (!provider) throw new Error(`Unsupported provider ${options.target}`);
+			const method = options.authMethod ?? (provider.authMethods.length === 1 ? provider.authMethods[0] : undefined);
+			if (!method) throw new Error(`--auth-method is required: ${provider.authMethods.join(", ")}`);
+			value = await agent.addProviderCredential(provider.providerId, {
+				method,
+				interaction: createTerminalInteraction(),
+			});
+		} else if (options.command === "providers-remove") {
+			await agent.removeProviderCredential(options.target!);
+			value = { removed: options.target };
+		} else if (options.command === "models-list") value = await agent.listModels(options.target);
+		else if (options.command === "config-get") value = await agent.getConfiguration();
+		else if (options.command === "config-set-model") {
+			value = await agent.updateConfiguration({ defaultModel: parseModelReference(options.target!) });
+		} else throw new Error(`Unsupported management command ${options.command}`);
+
+		if (options.format === "text") {
+			if (Array.isArray(value)) {
+				for (const entry of value) stdout.write(`${JSON.stringify(entry)}\n`);
+			} else stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+		} else stdout.write(`${JSON.stringify(value)}\n`);
 		return 0;
 	} finally {
-		await runtime.host.shutdown();
+		await agent.shutdown();
 	}
 }
 
@@ -221,7 +384,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 	const options = parseArgs(argv);
 	if (options.command === "run") return runOnce(options);
 	if (options.command === "chat") return runChat(options);
-	return runSessionCommand(options);
+	return runManagementCommand(options);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -232,10 +395,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 		.catch((error) => {
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode =
-				error instanceof AgentHarnessError
+				error instanceof AgentRuntimeError
 					? error.code === "session_locked" || error.code === "session"
 						? 4
-						: error.code === "auth"
+						: error.code.startsWith("provider_") || error.code === "credential_store"
 							? 3
 							: 1
 					: 2;

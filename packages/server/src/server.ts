@@ -1,29 +1,30 @@
 /// <reference types="bun-types" />
 import { join, resolve } from "node:path";
-import type { AgentEventEnvelope, AgentSession, ModelReference } from "@loopiq/agent-core";
-import { AgentHarnessError } from "@loopiq/agent-core";
-import { createDefaultRuntime } from "./harness-factory.ts";
+import type { Agent, AgentEventEnvelope, ModelReference, ProviderAuthMethod } from "@loopiq/agent";
+import { AgentRuntimeError } from "@loopiq/agent";
+import { ProviderCredentialJobs } from "./provider-credential-jobs.ts";
+import { createDefaultRuntime } from "./runtime-factory.ts";
 
 const PORT = Number(process.env.DEVUI_PORT ?? 4100);
-const MODEL_ID = process.env.DEVUI_MODEL ?? "claude-opus-4.6";
 const CWD = process.env.DEVUI_CWD ?? resolve(import.meta.dir, "../../..");
 const DATA_DIR = resolve(import.meta.dir, "../.data");
 const STATIC_DIR = process.env.DEVUI_STATIC_DIR ?? resolve(import.meta.dir, "../../devui/public");
 
 const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
-	"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+	"Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
 	"Access-Control-Allow-Headers": "Content-Type",
 };
 const JSON_HEADERS = { "Content-Type": "application/json", ...CORS_HEADERS };
 const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key)$/i;
 
-const { host, defaultSession, modelId } = await createDefaultRuntime({
+const { agent, defaultSessionId, model } = await createDefaultRuntime({
 	dataDir: DATA_DIR,
 	cwd: CWD,
-	modelId: MODEL_ID,
+	defaultModel: process.env.DEVUI_MODEL ? parseModelReference(process.env.DEVUI_MODEL) : undefined,
 });
 const encoder = new TextEncoder();
+const credentialJobs = new ProviderCredentialJobs();
 
 function json(value: unknown, status = 200): Response {
 	return new Response(JSON.stringify(value), { status, headers: JSON_HEADERS });
@@ -45,34 +46,37 @@ function safeEnvelope(envelope: AgentEventEnvelope): AgentEventEnvelope {
 	};
 }
 
-function sseResponse(session: AgentSession, legacy = false): Response {
+function sseResponse(agent: Agent, sessionId: string): Response {
 	let unsubscribe = () => {};
+	let closed = false;
 	const stream = new ReadableStream<Uint8Array>(
 		{
-			start(controller) {
-				let closed = false;
+			async start(controller) {
 				const close = () => {
 					if (closed) return;
 					closed = true;
 					unsubscribe();
 					controller.close();
 				};
-				unsubscribe = session.subscribe((rawEnvelope) => {
+				const stop = await agent.subscribe(sessionId, (rawEnvelope) => {
 					if (closed) return;
 					if ((controller.desiredSize ?? 1) <= 0) {
 						close();
 						return;
 					}
 					const envelope = safeEnvelope(rawEnvelope);
-					const payload = legacy ? envelope.event : envelope;
-					controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+					controller.enqueue(encoder.encode(`data: ${JSON.stringify(envelope)}\n\n`));
 				});
-				const ready = legacy
-					? { type: "server_ready", modelId }
-					: { type: "server_ready", modelId, sessionId: session.id };
+				if (closed) {
+					stop();
+					return;
+				}
+				unsubscribe = stop;
+				const ready = { type: "server_ready", model, sessionId };
 				controller.enqueue(encoder.encode(`data: ${JSON.stringify(ready)}\n\n`));
 			},
 			cancel() {
+				closed = true;
 				unsubscribe();
 			},
 		},
@@ -88,10 +92,51 @@ function sseResponse(session: AgentSession, legacy = false): Response {
 	});
 }
 
+function credentialJobSseResponse(jobId: string): Response | undefined {
+	if (!credentialJobs.has(jobId)) return undefined;
+	let unsubscribe = () => {};
+	let closed = false;
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			const stop = credentialJobs.subscribe(jobId, (event) => {
+				if (closed) return;
+				controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+				if (event.type === "completed" || event.type === "failed" || event.type === "canceled") {
+					closed = true;
+					controller.close();
+				}
+			});
+			if (!stop) {
+				closed = true;
+				controller.close();
+				return;
+			}
+			unsubscribe = stop;
+			if (closed) stop();
+		},
+		cancel() {
+			closed = true;
+			unsubscribe();
+		},
+	});
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache",
+			Connection: "keep-alive",
+			...CORS_HEADERS,
+		},
+	});
+}
+
 function errorResponse(error: unknown): Response {
-	if (error instanceof AgentHarnessError) {
+	if (error instanceof AgentRuntimeError) {
 		const status =
-			error.code === "busy" || error.code === "invalid_state" ? 409 : error.code === "session_locked" ? 423 : 400;
+			error.code === "busy" || error.code === "provider_busy" || error.code === "invalid_state"
+				? 409
+				: error.code === "session_locked"
+					? 423
+					: 400;
 		return json({ error: error.message, code: error.code }, status);
 	}
 	return json({ error: error instanceof Error ? error.message : String(error) }, 500);
@@ -118,44 +163,87 @@ Bun.serve({
 			const url = new URL(request.url);
 			if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
 
-			if (url.pathname === "/api/events" && request.method === "GET") return sseResponse(defaultSession, true);
-			if (url.pathname === "/api/prompt" && request.method === "POST") {
-				const body = (await request.json().catch(() => null)) as { text?: unknown } | null;
-				if (!body || typeof body.text !== "string" || !body.text.trim())
-					return json({ error: "text required" }, 400);
-				const snapshot = defaultSession.getSnapshot();
-				if (snapshot.state === "idle") {
-					const handle = defaultSession.startRun({ text: body.text });
-					return json({ status: "accepted", sessionId: defaultSession.id, runId: handle.runId }, 202);
-				}
-				if (!snapshot.currentRunId) throw new AgentHarnessError("invalid_state", "Session has no active run");
-				await defaultSession.steer(snapshot.currentRunId, { text: body.text });
-				return json({ status: "steered", sessionId: defaultSession.id, runId: snapshot.currentRunId }, 202);
-			}
-			if (url.pathname === "/api/abort" && request.method === "POST") {
-				return json(await defaultSession.abortCurrent());
+			if (url.pathname === "/api/runtime" && request.method === "GET") {
+				return json({ model, defaultSessionId, configuration: await agent.getConfiguration() });
 			}
 
-			if (url.pathname === "/api/sessions" && request.method === "GET") return json(await host.list());
+			if (url.pathname === "/api/configuration" && request.method === "GET") {
+				return json(await agent.getConfiguration());
+			}
+			if (url.pathname === "/api/configuration" && request.method === "PATCH") {
+				const body = (await request.json().catch(() => null)) as { defaultModel?: unknown } | null;
+				const defaultModel = parseModelReference(body?.defaultModel);
+				if (!defaultModel) return json({ error: "defaultModel must use provider/model format" }, 400);
+				return json(await agent.updateConfiguration({ defaultModel }));
+			}
+
+			if (url.pathname === "/api/providers" && request.method === "GET") {
+				return json(
+					await agent.listProviders({ validateCredentials: url.searchParams.get("validate") === "true" }),
+				);
+			}
+			const providerModelsMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/models$/);
+			if (providerModelsMatch && request.method === "GET") {
+				return json(
+					await agent.listModels(providerModelsMatch[1]!, { refresh: url.searchParams.get("refresh") === "true" }),
+				);
+			}
+			const providerCredentialMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/credential$/);
+			if (providerCredentialMatch && request.method === "DELETE") {
+				await agent.removeProviderCredential(providerCredentialMatch[1]!);
+				return new Response(null, { status: 204, headers: CORS_HEADERS });
+			}
+			if (providerCredentialMatch && request.method === "POST") {
+				const body = (await request.json().catch(() => null)) as { method?: unknown } | null;
+				if (body?.method !== "api_token" && body?.method !== "oauth") {
+					return json({ error: "method must be api_token or oauth" }, 400);
+				}
+				const jobId = credentialJobs.start(agent, providerCredentialMatch[1]!, body.method as ProviderAuthMethod);
+				return json({ jobId }, 202);
+			}
+
+			const credentialEventsMatch = url.pathname.match(/^\/api\/provider-credential-jobs\/([^/]+)\/events$/);
+			if (credentialEventsMatch && request.method === "GET") {
+				return (
+					credentialJobSseResponse(credentialEventsMatch[1]!) ?? json({ error: "Credential job not found" }, 404)
+				);
+			}
+			const credentialRespondMatch = url.pathname.match(/^\/api\/provider-credential-jobs\/([^/]+)\/respond$/);
+			if (credentialRespondMatch && request.method === "POST") {
+				const body = (await request.json().catch(() => null)) as { promptId?: unknown; value?: unknown } | null;
+				if (typeof body?.promptId !== "string" || typeof body.value !== "string") {
+					return json({ error: "promptId and value are required" }, 400);
+				}
+				return credentialJobs.respond(credentialRespondMatch[1]!, body.promptId, body.value)
+					? json({ status: "accepted" }, 202)
+					: json({ error: "Credential prompt not found" }, 404);
+			}
+			const credentialJobMatch = url.pathname.match(/^\/api\/provider-credential-jobs\/([^/]+)$/);
+			if (credentialJobMatch && request.method === "DELETE") {
+				return credentialJobs.cancel(credentialJobMatch[1]!)
+					? json({ status: "canceled" })
+					: json({ error: "Active credential job not found" }, 404);
+			}
+
+			if (url.pathname === "/api/sessions" && request.method === "GET") return json(await agent.listSessions());
 			if (url.pathname === "/api/sessions" && request.method === "POST") {
 				const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-				const session = await host.create({
+				const session = await agent.createSession({
 					cwd: typeof body.cwd === "string" ? body.cwd : CWD,
 					model: parseModelReference(body.model),
 					thinkingLevel: typeof body.thinkingLevel === "string" ? (body.thinkingLevel as never) : undefined,
 				});
-				return json(session.getSnapshot(), 201);
+				return json(session, 201);
 			}
 
 			const eventsMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/events$/);
-			if (eventsMatch && request.method === "GET") return sseResponse(await host.open(eventsMatch[1]!));
+			if (eventsMatch && request.method === "GET") return sseResponse(agent, eventsMatch[1]!);
 			const runMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs$/);
 			if (runMatch && request.method === "POST") {
 				const body = (await request.json().catch(() => null)) as { text?: unknown } | null;
 				if (!body || typeof body.text !== "string" || !body.text.trim())
 					return json({ error: "text required" }, 400);
-				const session = await host.open(runMatch[1]!);
-				const handle = session.startRun({ text: body.text });
+				const handle = await agent.run(runMatch[1]!, { text: body.text });
 				return json({ sessionId: handle.sessionId, runId: handle.runId }, 202);
 			}
 			const steerMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/steer$/);
@@ -166,8 +254,8 @@ Bun.serve({
 				} | null;
 				if (!body || typeof body.text !== "string" || !body.text.trim())
 					return json({ error: "text required" }, 400);
-				const session = await host.open(steerMatch[1]!);
-				await session.steer(
+				await agent.steer(
+					steerMatch[1]!,
 					steerMatch[2]!,
 					{ text: body.text },
 					{ interruptCurrentInference: body.interruptCurrentInference === true },
@@ -176,14 +264,26 @@ Bun.serve({
 			}
 			const abortMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)\/abort$/);
 			if (abortMatch && request.method === "POST") {
-				return json(await (await host.open(abortMatch[1]!)).abort(abortMatch[2]!));
+				return json(await agent.abort(abortMatch[1]!, abortMatch[2]!));
 			}
 			const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
-			if (sessionMatch && request.method === "GET") return json((await host.open(sessionMatch[1]!)).getSnapshot());
+			if (sessionMatch && request.method === "GET") return json(await agent.getSession(sessionMatch[1]!));
+			if (sessionMatch && request.method === "PATCH") {
+				const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+				const nextModel = body.model === undefined ? undefined : parseModelReference(body.model);
+				if (body.model !== undefined && !nextModel)
+					return json({ error: "model must use provider/model format" }, 400);
+				return json(
+					await agent.updateSession(sessionMatch[1]!, {
+						model: nextModel,
+						thinkingLevel: typeof body.thinkingLevel === "string" ? (body.thinkingLevel as never) : undefined,
+					}),
+				);
+			}
 			if (sessionMatch && request.method === "DELETE") {
-				if (sessionMatch[1] === defaultSession.id)
+				if (sessionMatch[1] === defaultSessionId)
 					return json({ error: "Cannot delete the DevUI default Session" }, 409);
-				await host.delete(sessionMatch[1]!);
+				await agent.deleteSession(sessionMatch[1]!);
 				return new Response(null, { status: 204, headers: CORS_HEADERS });
 			}
 
@@ -195,4 +295,6 @@ Bun.serve({
 	error: errorResponse,
 });
 
-console.log(`[devui] server on http://localhost:${PORT} (model: ${modelId}, session: ${defaultSession.id})`);
+console.log(
+	`[devui] server on http://localhost:${PORT} (model: ${model.providerId}/${model.modelId}, session: ${defaultSessionId})`,
+);

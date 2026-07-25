@@ -10,7 +10,7 @@
 // The skill drives the SAME shared session the browser devui shows, so sends also
 // appear on devui as user bubbles.
 
-import { baseUrl, events, messageText, post } from "./client.mjs";
+import { baseUrl, events, messageText, post, runtime, sessionSnapshot } from "./client.mjs";
 
 function fail(message, code = 1) {
 	console.error(message);
@@ -24,9 +24,18 @@ function serverHint() {
 // Send a prompt and block until `agent_end`, then print the assistant's final text.
 async function cmdSend(text) {
 	if (!text || !text.trim()) fail('usage: devctl send "<text>"');
+	let runtimeInfo;
+	let snapshot;
+	try {
+		runtimeInfo = await runtime();
+		snapshot = await sessionSnapshot(runtimeInfo.defaultSessionId);
+	} catch (error) {
+		fail(`cannot discover devui runtime: ${error.message}\n${serverHint()}`);
+	}
+	const sessionId = runtimeInfo.defaultSessionId;
 
 	const ac = new AbortController();
-	const stream = events(ac.signal);
+	const stream = events(sessionId, ac.signal);
 
 	// Establish the SSE connection first (first event is server_ready) so we are
 	// registered as a client before the prompt fires and don't miss early events.
@@ -38,16 +47,29 @@ async function cmdSend(text) {
 	}
 	if (first.done) fail(`event stream closed before it started.\n${serverHint()}`);
 
-	const res = await post("/api/prompt", { text }).catch((error) => {
+	let runId = snapshot.currentRunId;
+	const path = runId
+		? `/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/steer`
+		: `/api/sessions/${encodeURIComponent(sessionId)}/runs`;
+	const res = await post(path, { text }).catch((error) => {
 		fail(`prompt request failed: ${error.message}\n${serverHint()}`);
 	});
 	if (!res.ok) {
 		const detail = await res.text().catch(() => "");
 		fail(`prompt failed: ${res.status} ${detail}`);
 	}
+	if (!runId) {
+		const accepted = await res.json().catch(() => ({}));
+		runId = accepted.runId;
+		if (!runId) fail("prompt accepted without a runId");
+	}
 
 	let finalText = "";
-	for await (const event of stream) {
+	for await (const envelope of stream) {
+		if (envelope.type === "server_ready") continue;
+		if (envelope.runId && envelope.runId !== runId) continue;
+		const event = envelope.event;
+		if (!event) continue;
 		if (event.type === "server_error") {
 			ac.abort();
 			fail(`server_error: ${event.message}`);
@@ -59,6 +81,8 @@ async function cmdSend(text) {
 			const messages = Array.isArray(event.messages) ? event.messages : [];
 			const lastAssistant = [...messages].reverse().find((m) => m?.role === "assistant");
 			if (lastAssistant) finalText = messageText(lastAssistant);
+		}
+		if (event.type === "run_settled") {
 			ac.abort();
 			break;
 		}
@@ -68,7 +92,17 @@ async function cmdSend(text) {
 }
 
 async function cmdAbort() {
-	const res = await post("/api/abort").catch((error) => {
+	let runtimeInfo;
+	let snapshot;
+	try {
+		runtimeInfo = await runtime();
+		snapshot = await sessionSnapshot(runtimeInfo.defaultSessionId);
+	} catch (error) {
+		fail(`cannot discover devui runtime: ${error.message}\n${serverHint()}`);
+	}
+	if (!snapshot.currentRunId) fail("abort failed: the devui Session has no active run");
+	const path = `/api/sessions/${encodeURIComponent(runtimeInfo.defaultSessionId)}/runs/${encodeURIComponent(snapshot.currentRunId)}/abort`;
+	const res = await post(path).catch((error) => {
 		fail(`abort request failed: ${error.message}\n${serverHint()}`);
 	});
 	if (!res.ok) fail(`abort failed: ${res.status}`);
@@ -77,13 +111,20 @@ async function cmdAbort() {
 }
 
 async function cmdWatch() {
+	let runtimeInfo;
+	try {
+		runtimeInfo = await runtime();
+	} catch (error) {
+		fail(`cannot discover devui runtime: ${error.message}\n${serverHint()}`);
+	}
 	const ac = new AbortController();
 	process.on("SIGINT", () => {
 		ac.abort();
 		process.exit(0);
 	});
 	try {
-		for await (const event of events(ac.signal)) {
+		for await (const envelope of events(runtimeInfo.defaultSessionId, ac.signal)) {
+			const event = envelope.event ?? envelope;
 			const { type, ...rest } = event;
 			const detail = JSON.stringify(rest);
 			console.log(detail === "{}" ? type : `${type} ${detail}`);

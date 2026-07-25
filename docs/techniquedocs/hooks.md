@@ -1,4 +1,4 @@
-# AgentHarness hooks design
+# Agent Runtime Hooks Design
 
 <!-- Synced from jot 3utlzkxy. Edit this file in-repo going forward. -->
 
@@ -13,7 +13,7 @@ reducers match the rules below.
 
 The phantom `HookEvent` result type, generic context object, observers, cleanup,
 source metadata, scopes, and configurable error policy described in this
-document are not implemented yet. The current public registration surface
+document are not implemented yet. The current internal registration surface
 remains `subscribe()` for notifications and `on(type)` for hooks.
 
 ## Core model
@@ -74,7 +74,7 @@ No result map. No spec table. The event type defines its own result.
 ## Hooks interface
 
 ```ts
-interface AgentHarnessHooks<E extends HookEvent<string, unknown>, Ctx> {
+interface AgentHooks<E extends HookEvent<string, unknown>, Ctx> {
   context: Ctx;
 
   setContext(ctx: Ctx): void;
@@ -102,16 +102,16 @@ Important split:
 
 - `observe()` sees all events, read-only, return ignored.
 - `on(type, handler)` participates in that event’s semantics.
-- `emit(event)` is the only thing `AgentHarness` calls.
+- `emit(event)` is the only thing the runtime calls.
 - `clear()` removes observers/handlers and runs cleanups.
 
 ## Default implementation internals
 
 ```ts
-class DefaultAgentHarnessHooks<
+class DefaultAgentHooks<
   E extends HookEvent<string, unknown>,
   Ctx,
-> implements AgentHarnessHooks<E, Ctx> {
+> implements AgentHooks<E, Ctx> {
   context: Ctx;
 
   private observers = new Set<HookObserver<E, Ctx>>();
@@ -296,9 +296,9 @@ for (const handler of handlers(event.type)) {
 return last;
 ```
 
-## Harness usage
+## Agent usage
 
-Harness only does this:
+The Agent runtime only does this:
 
 ```ts
 await this.hooks.emit(event, signal);
@@ -311,7 +311,8 @@ const result = await this.hooks.emit({ type: "context", messages }, signal);
 return result?.messages ?? messages;
 ```
 
-Harness does not store handlers, chain listeners, or know extension policy.
+The Agent runtime does not store handlers, chain listeners, or know extension
+policy.
 
 ## Context
 
@@ -319,7 +320,7 @@ Context is a normal object, not rebuilt per emit.
 
 ```ts
 const hooks = new CodingAgentHooks({
-  harness: harnessFacade,
+  agent: agentFacade,
   session: sessionFacade,
   ui: noUiFacade,
 });
@@ -338,7 +339,7 @@ For dynamic state, prefer stable facades/methods over getter maze:
 
 ```ts
 interface CodingAgentHookContext {
-  harness: HarnessFacade;
+  runtime: AgentRuntimeFacade;
   session: SessionFacade;
   ui: UiFacade;
   models: ModelFacade;
@@ -349,7 +350,7 @@ Per-run `signal` is passed as the third handler arg.
 
 ## Extension loading later
 
-Extension loading can live next to harness and construct hooks:
+Extension loading can live next to the runtime and construct hooks:
 
 ```ts
 const hooks = await loadExtensions({
@@ -357,7 +358,8 @@ const hooks = await loadExtensions({
 	context,
 	hooks: new CodingAgentHooks(context),
 });
-const harness = new AgentHarness({ ..., hooks });
+const session = await host.open(sessionId);
+registerSessionHooks(session, hooks);
 ```
 
 The loader registers into hooks:
@@ -373,7 +375,7 @@ For reload:
 ```ts
 await hooks.clear();
 const nextHooks = await loadExtensions(...);
-harness.setHooks(nextHooks); // idle-only if supported
+registerSessionHooks(session, nextHooks); // idle-only if supported
 ```
 
 ## Poking holes
@@ -416,7 +418,7 @@ These are not covered by `emit()` and should stay as registries on `CodingAgentH
 - OAuth providers
 - custom model providers
 
-That is fine. They do not belong in `AgentHarness`.
+That is fine. They do not belong in `AgentHooks`.
 
 ### 4. Existing coding-agent events can be represented
 
@@ -463,7 +465,10 @@ Observers see the original emitted event once. They do not see every intermediat
 
 ## Verdict
 
-This design can implement a new coding-agent. It is simpler than the current runner, keeps harness clean, and preserves the important extension capabilities as long as `CodingAgentHooks` adds source-aware scopes, registries, cleanup, and the exact old event semantics.
+This design can implement a new coding-agent. It is simpler than the current
+runner, keeps the Agent runtime clean, and preserves the important extension
+capabilities as long as `CodingAgentHooks` adds source-aware scopes, registries,
+cleanup, and the exact old event semantics.
 
 --- Comments ---
 

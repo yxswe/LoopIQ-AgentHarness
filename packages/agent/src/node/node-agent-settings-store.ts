@@ -1,0 +1,65 @@
+import { join } from "node:path";
+import { AgentRuntimeError, toError } from "../base/types.ts";
+import type { AgentConfiguration } from "../model/provider-types.ts";
+import { withNodeFileLock } from "./node-file-lock.ts";
+import { readJsonFile, writeJsonFileAtomic } from "./node-json-file.ts";
+
+function isAgentConfiguration(value: unknown): value is AgentConfiguration {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	if (Object.keys(record).some((key) => key !== "defaultModel")) return false;
+	const model = record.defaultModel;
+	return Boolean(
+		model &&
+			typeof model === "object" &&
+			!Array.isArray(model) &&
+			typeof (model as Record<string, unknown>).providerId === "string" &&
+			typeof (model as Record<string, unknown>).modelId === "string" &&
+			Object.keys(model).every((key) => key === "providerId" || key === "modelId"),
+	);
+}
+
+export class NodeAgentSettingsStore {
+	private readonly filePath: string;
+	private readonly lockPath: string;
+
+	constructor(dataDir: string) {
+		this.filePath = join(dataDir, "agent.json");
+		this.lockPath = join(dataDir, "agent.lock");
+	}
+
+	async loadOrCreate(defaults: AgentConfiguration): Promise<AgentConfiguration> {
+		return withNodeFileLock(this.lockPath, async () => {
+			const current = await this.read();
+			if (current) return current;
+			await this.write(defaults);
+			return structuredClone(defaults);
+		});
+	}
+
+	async update(configuration: AgentConfiguration): Promise<AgentConfiguration> {
+		return withNodeFileLock(this.lockPath, async () => {
+			await this.write(configuration);
+			return structuredClone(configuration);
+		});
+	}
+
+	private async read(): Promise<AgentConfiguration | undefined> {
+		try {
+			const value = await readJsonFile<unknown>(this.filePath);
+			if (value === undefined) return undefined;
+			if (!isAgentConfiguration(value)) throw new Error("Agent settings contain an unsupported shape");
+			return value;
+		} catch (error) {
+			throw new AgentRuntimeError("agent_configuration", "Failed to read Agent settings", toError(error));
+		}
+	}
+
+	private async write(configuration: AgentConfiguration): Promise<void> {
+		try {
+			await writeJsonFileAtomic(this.filePath, configuration);
+		} catch (error) {
+			throw new AgentRuntimeError("agent_configuration", "Failed to save Agent settings", toError(error));
+		}
+	}
+}

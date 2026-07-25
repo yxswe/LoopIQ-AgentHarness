@@ -4,9 +4,7 @@
 		"outDir": "./dist",
 		"rootDir": "./src",
 		"paths": {
-			"@loopiq/ai": ["../ai/dist/index.d.ts"],
-			"@loopiq/ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
-			"@loopiq/agent-core": ["../agent-harness/dist/index.d.ts"]
+			"@loopiq/agent": ["../agent/dist/index.d.ts"]
 		}
 	},
 	"include": ["src/**/*.ts"],

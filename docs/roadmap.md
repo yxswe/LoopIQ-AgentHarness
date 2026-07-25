@@ -1,8 +1,8 @@
 # Roadmap / TODO
 
-Forward-looking work items to evolve `@loopiq/agent-core` from a solid runtime
-kernel into a complete, production-grade agent harness. See `docs/architect.md`
-for the current architecture.
+Forward-looking work items for evolving the Agent into a complete,
+production-grade application. See `docs/architect.md` for the current
+architecture.
 
 ## Cross-cutting requirements (apply to EVERY item below)
 
@@ -21,34 +21,188 @@ design and implementation:
 
 ---
 
-## 1. Complete the built-in tool set
+## 1. Expand the built-in tool platform
 
-**Why**: The kernel currently ships zero concrete tools (`src/tools/` only has
-`utils/`), and the server wires `tools: []`. The agent can only chat — it cannot
-read/write files or run commands. This is the highest-priority gap.
+**Current baseline**: the kernel ships seven concrete tools (`Read`, `Write`,
+`Edit`, `Bash`, `Grep`, `Glob`, and `ListDir`) through
+`createDefaultTools(env)`. The Agent installs this default set, and every tool
+has co-located unit tests. The remaining work is to add higher-level agent
+capabilities and strengthen the shared execution platform rather than rebuild
+the filesystem/shell baseline.
+
+### P1: AskUser tool
+
+**Why**: the model has no structured way to pause a turn, request missing input,
+and resume after the application receives a user response. Guessing or ending
+the turn is currently the only option when clarification is required.
 
 **Scope**:
-- Implement a core tool suite on top of the existing `AgentTool` interface and
-  `ExecutionEnv` abstraction: file read, write, edit, search (grep/glob),
-  directory listing, shell/bash execution.
-- Support streaming partial results via `AgentToolUpdateCallback`, honor
-  `AbortSignal`, and use the per-tool `executionMode` (sequential/parallel).
-- Reuse `tools/utils` (`shell-output`, `truncate`) for output shaping.
-- Wire a default tool set into `harness-factory` so the DevUI agent can act.
+- Add an `AskUser` tool with a structured question and optional constrained
+  choices while still allowing free-form responses.
+- Define the full suspend/resume lifecycle: request identity, pending state,
+  response delivery, abort behavior, timeout/disconnect behavior, and duplicate
+  response rejection.
+- Expose the request through the event/API layer so headless applications and
+  DevUI can provide responses without coupling the core package to a UI.
 
-**Observability**: tool lifecycle events already exist
-(`tool_execution_start/update/end`); ensure each tool populates rich `details`
-for logs/UI, and report per-tool latency and truncation.
+**Observability**: emit request, response, cancellation, timeout, and resume
+events correlated with the originating turn and tool call. Do not record hidden
+reasoning or credentials in the question payload.
 
-**Tests**: unit-test each tool against `ExecutionEnv`, including permission
-errors, aborts, large-output truncation, and parallel execution ordering.
+**Tests**: structured and free-form responses, abort while waiting, timeout or
+client disconnect, duplicate/late responses, and headless/DevUI integration.
+
+### P1: Web tools
+
+**Why**: filesystem and shell tools cannot reliably satisfy research tasks or
+retrieve current external documentation. Applications should not need to invent
+incompatible web-search and page-fetch contracts.
+
+**Scope**:
+- Add `WebSearch` and `WebFetch` as separate tools so discovery and retrieval
+  remain independently controllable.
+- Keep search-provider and HTTP-client concerns behind injectable interfaces;
+  the core tool contract must not require a single vendor.
+- Define URL policy, redirect limits, SSRF/private-network protection, content
+  type handling, response-size limits, text extraction, cancellation, timeout,
+  and citation/source metadata.
+- Make network access explicitly configurable so offline or restricted
+  applications can omit the tools entirely.
+
+**Observability**: report provider, normalized target URL, status, latency,
+redirect count, bytes received, extraction/truncation, and policy rejection
+without logging authorization headers or sensitive query parameters.
+
+**Tests**: provider failures, redirect loops, SSRF attempts, oversized and
+binary responses, malformed pages, abort/timeout, deterministic result shaping,
+and disabled-network behavior.
+
+### P1: Progress planning tools
+
+**Why**: multi-step work has no structured progress surface. Plans currently
+exist only as assistant text, so applications cannot render, validate, or resume
+task progress consistently.
+
+**Scope**:
+- Add a plan/progress tool surface equivalent to `StartPlan` and `TodoWrite`,
+  with stable item identity and explicit `pending`, `in_progress`, and
+  `completed` states.
+- Define whether plan state is persisted as linear Session custom entries or
+  owned by an application-provided store; do not add branching semantics back
+  into Session.
+- Enforce replacement/update semantics, ordering, at-most-one active item where
+  configured, and deterministic behavior when a turn is aborted.
+- Expose snapshots and updates through the event layer for CLI and DevUI
+  rendering.
+
+**Observability**: emit plan creation, replacement, item transition, completion,
+and rejection events with session/turn correlation.
+
+**Tests**: state transitions, invalid plans, replacement and resume, abort
+behavior, persistence round-trips when enabled, and event ordering.
+
+### P2: Background task management
+
+**Why**: `Bash` can start a background command and return an id/log path, but
+the Agent does not retain task state. There is no supported way to list a
+task, inspect status and exit code, incrementally read its log, cancel it, or
+clean it up.
+
+**Scope**:
+- Introduce a session-scoped background task manager with stable task ids,
+  lifecycle states, timestamps, exit information, bounded log storage, and
+  cancellation.
+- Add `ListTasks`, `ReadTaskLog`, and `CancelTask` tools; support byte offsets or
+  tail reads so polling does not repeatedly return the entire log.
+- Route `Bash` background execution through the manager instead of launching an
+  untracked promise.
+- Define process-tree termination, Agent shutdown cleanup, completed-task
+  retention, session restart behavior, and platform differences.
+
+**Observability**: emit task start, output progress, state transition, exit,
+cancellation, cleanup, and log-truncation events.
+
+**Tests**: successful/failing commands, concurrent tasks, incremental log reads,
+cancellation and process-tree cleanup, Agent shutdown, retention limits, and
+restart/recovery semantics.
+
+### P2: Platform-level tool timeout
+
+**Why**: individual tools may honor `AbortSignal`, but a custom tool that ignores
+the signal or never settles can block the entire turn indefinitely.
+
+**Scope**:
+- Enforce a default timeout in the shared tool executor around every tool call,
+  independent of tool-specific timeout parameters.
+- Allow an application default and an optional per-tool override, including an
+  explicit opt-out for intentionally long-lived integrations.
+- Abort the tool signal when the deadline expires, classify deadline expiry
+  separately from user cancellation, and ignore updates emitted after timeout.
+- Define how timeout interacts with sequential/parallel batches and early
+  termination.
+
+**Observability**: include configured deadline, elapsed time, timeout source,
+and final classification in tool lifecycle events.
+
+**Tests**: cooperative and non-cooperative tools, timeout races, user abort vs
+deadline expiry, parallel batches, late updates/results, and timer cleanup.
+
+### P2: Unified tool-result budget
+
+**Why**: built-in tools perform local truncation, but an application or plugin
+tool can still return an arbitrarily large result and consume the model context.
+Tool-specific limits also produce inconsistent behavior.
+
+**Scope**:
+- Add a shared byte/token budget when converting final tool results into model
+  message history, covering text and image content.
+- Preserve the complete raw result for application-controlled diagnostics or
+  external storage while providing only a deterministic bounded representation
+  to the model.
+- Append a visible truncation marker and structured metadata containing the
+  original size, retained size, and retrieval reference when one exists.
+- Define per-call and per-batch limits and their interaction with existing
+  Read/Bash/Grep truncation.
+
+**Observability**: report raw and model-visible sizes, truncation reason, budget
+source, and external-result reference without duplicating large payloads in
+events.
+
+**Tests**: boundary sizes, multibyte text, mixed text/image results, parallel
+batches, pre-truncated built-in results, replay from Session, and unavailable raw
+result storage.
+
+### P2: Skill tool
+
+**Why**: skill discovery, validation, and invocation formatting already exist,
+but there is no default model-callable tool for selecting and loading a skill on
+demand. Applications must manually embed skill behavior in their system prompt.
+
+**Scope**:
+- Add a `Skill` tool backed by `AgentResources.skills`, exposing only
+  model-invocable skill names and descriptions in its schema or prompt surface.
+- Resolve a selected skill to `formatSkillInvocation()` content while honoring
+  `disableModelInvocation`, duplicate-name validation, and relative reference
+  locations.
+- Define unknown/disabled skill errors and whether additional user instructions
+  can accompany invocation.
+- Keep resources construction-time fixed; adding this tool must not implicitly
+  introduce runtime resource mutation.
+
+**Observability**: emit selected skill identity, source path/provenance when
+available, resolution failure, and invocation size without logging the full
+skill body by default.
+
+**Tests**: successful invocation, unknown and disabled skills, duplicate names,
+relative reference location, optional additional instructions, and resource
+snapshot behavior across turns.
 
 ## 2. Auto-trigger context management in the loop
 
 **Why**: Compaction is implemented as a standalone module
 (`context/compaction/compaction.ts` — `shouldCompact`, `estimateContextTokens`,
-`findCutPoint`, `generateSummary`), but nothing in `core/` (`turn-runner.ts` /
-`agent-harness.ts`) ever calls it. The `"compaction"` phase literal exists but is
+`findCutPoint`, `generateSummary`), but `engine/agent-run.ts` never calls it. The
+`"compaction"` phase literal exists but is
 never entered. So context management is dead code from the loop's perspective —
 long sessions will overflow the context window. Wiring this is the second
 priority, right after having tools that actually generate context.
@@ -73,12 +227,12 @@ appended and context rebuilt, hook override respected, and abort-safety.
 
 ## 3. CLI & headless entrypoint
 
-**Why**: The harness can only be driven by the DevUI server today. There is no
-`bin`, so scripting/automation/CI use is impractical.
+**Why**: The Agent needs consistent behavior across DevUI and headless use, with
+reliable scripting, automation, and CI behavior.
 
 **Scope**:
-- Add a CLI/headless entrypoint (a `bin` for the package or a dedicated CLI
-  package) that constructs a harness, accepts a prompt (arg/stdin), streams
+- Extend the CLI/headless entrypoint so it constructs the Agent, accepts a
+  prompt (arg/stdin), streams
   output, and exits deterministically.
 - Support one-shot and interactive modes, session selection/resume, model and
   thinking-level flags, and machine-readable output (JSON/JSONL) for piping.
@@ -91,29 +245,32 @@ exit code), plus tests for flag parsing and headless session lifecycle.
 
 ## 4. Kernel test coverage
 
-**Why**: Core runtime logic (turn loop, session, compaction, queues, skills)
-currently has no unit tests — all existing tests live in `@loopiq/ai` and the
-server's credential store. Correctness is unverified.
+**Why**: the built-in tools and JSONL Session storage now have unit tests, but
+the central turn lifecycle, queueing, compaction integration, event contracts,
+and skill loading remain largely uncovered. These paths coordinate mutable
+state and cancellation, so regressions can cross subsystem boundaries even when
+individual tools and storage primitives pass.
 
 **Scope**:
 - Turn loop: `TurnRunner`/`TurnState` — event ordering, tool execution
   (sequential/parallel), steer/follow-up/next-turn queue draining, abort.
-- Session: append/branch/fork, `SessionWriter` buffering/flush atomicity,
-  JSONL round-trip.
+- Session: linear append/context semantics, `SessionWriter` buffering and flush
+  ordering, storage failures, and concurrent append behavior. JSONL format
+  validation and round-trips already have baseline coverage.
 - Compaction: threshold triggering, first-kept marker, file read/write
   tracking, `session_before_compact` override.
 - Queues and skills loading (SKILL.md discovery, frontmatter, ignore files).
-- Introduce test fixtures / a fake `ExecutionEnv` and a faux model provider.
+- Introduce shared test fixtures, a fake `ExecutionEnv`, and a faux model
+  provider for deterministic cross-subsystem tests.
 
 **Observability**: tests should assert on emitted events, making the event
 contract itself part of the spec.
 
 ## 5. Stateless engine serving multiple sessions in parallel
 
-**Why**: The harness currently binds one engine instance to one session. Goal:
-extract session state so a single stateless agent engine instance can serve many
-concurrent sessions in parallel. This is a foundational refactor — sub-agents
-(item 6) can reuse the multi-session engine, so it lands first.
+**Why**: The Agent must preserve isolation while sharing one engine across
+Sessions. The stateless engine and explicit Session state form the foundation
+for sub-agents in item 6.
 
 **Scope**:
 - Separate the stateless "engine" (turn loop, tool dispatch, provider calls,
@@ -135,7 +292,7 @@ bleed), isolation/abort per session, and load/stress tests for the engine.
 ## 6. Sub-agent design
 
 **Why**: No sub-agent / delegation mechanism exists (`subagent` grep = 0). Real
-harnesses spawn isolated child agents for parallel or scoped tasks.
+Agents spawn isolated child Agents for parallel or scoped tasks.
 
 **Scope**:
 - Design how a parent turn spawns a child agent (own context/session,
@@ -143,7 +300,7 @@ harnesses spawn isolated child agents for parallel or scoped tasks.
   cancellation propagates.
 - Decide isolation model: separate session branch vs separate engine instance
   (build on the stateless multi-session engine from item 5).
-- Expose sub-agent invocation as a tool and/or a harness primitive.
+- Expose sub-agent invocation as a tool and/or an Agent primitive.
 
 **Observability**: parent↔child event correlation (trace/span IDs), aggregate
 child token/cost/latency up to the parent, surface child lifecycle on the bus.
