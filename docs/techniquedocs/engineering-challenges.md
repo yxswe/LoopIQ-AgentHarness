@@ -2,7 +2,7 @@
 
 Status: Living document
 
-Last reviewed: 2026-07-26
+Last reviewed: 2026-07-27
 
 This document records difficult cross-cutting scenarios whose failure modes are
 easy to miss when reviewing one subsystem in isolation. Each entry must separate
@@ -29,9 +29,9 @@ tools, and the Node execution environment.
 ### Scenario
 
 One Agent process can load multiple Sessions concurrently. Different Sessions
-are allowed to use the same `cwd`, and each Session has its own execution
-environment and tool instances. Two runs can therefore target the same physical
-workspace file at the same time.
+are allowed to use the same `workspaceDir`, and each Session has its own
+execution environment and tool instances. Two runs can therefore target the
+same physical workspace file at the same time.
 
 The required invariant is:
 
@@ -96,11 +96,11 @@ The current runtime does not provide:
 - a process-wide per-file mutation queue shared by all Sessions;
 - an atomic validate-and-write operation for Edit or overwrite Write;
 - coordination with Bash or external processes that mutate the workspace;
-- cross-process workspace locking when CLI and Server use the same `cwd`;
+- cross-process workspace locking when CLI and Server use the same `workspaceDir`;
 - automatic Git worktree isolation for concurrently writing Sessions.
 
-Consequently, sharing a `cwd` is safe for independent or read-only work, but it
-is not a guarantee of conflict-free concurrent mutation.
+Consequently, sharing a `workspaceDir` is safe for independent or read-only
+work, but it is not a guarantee of conflict-free concurrent mutation.
 
 ### Preferred Direction (Not Implemented)
 

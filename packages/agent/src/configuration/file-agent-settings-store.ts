@@ -47,9 +47,9 @@ export class FileAgentSettingsStore {
 	private readonly filePath: string;
 	private readonly lockPath: string;
 
-	constructor(dataDir: string) {
-		this.filePath = join(dataDir, "agent.json");
-		this.lockPath = join(dataDir, "agent.lock");
+	constructor(agentHome: string) {
+		this.filePath = join(agentHome, "agent.json");
+		this.lockPath = join(agentHome, "agent.lock");
 	}
 
 	async loadOrCreate(defaults: AgentConfiguration): Promise<AgentConfiguration> {

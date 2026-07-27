@@ -20,9 +20,9 @@ export class FileCredentialStore implements CredentialStore {
 	private readonly filePath: string;
 	private readonly lockPath: string;
 
-	constructor(dataDir: string) {
-		this.filePath = join(dataDir, "credentials.json");
-		this.lockPath = join(dataDir, "credentials.lock");
+	constructor(agentHome: string) {
+		this.filePath = join(agentHome, "credentials.json");
+		this.lockPath = join(agentHome, "credentials.lock");
 	}
 
 	async read(providerId: string): Promise<Credential | undefined> {

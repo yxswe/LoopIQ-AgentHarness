@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last audited: 2026-07-26
+Last audited: 2026-07-27
 
 This document defines current multi-Session ownership, concurrency, hosting, and
 adapter contracts. `Agent` is the sole application entry; concrete hosts,
@@ -39,7 +39,7 @@ The concurrency contract is:
 - no coordination of files, shell processes, or other external resources
   across different Sessions.
 
-Different Sessions may use the same `cwd` and still run concurrently.
+Different Sessions may use the same `workspaceDir` and still run concurrently.
 
 ## Ownership
 
@@ -99,13 +99,14 @@ export interface Agent {
 
 Every facade method performs one delegation to `AgentSessionManager`,
 `ModelRuntime`, or `AgentSettings`; it does not implement cross-owner workflows.
-`createAgent({ dataDir })` is the separate composition root. It asynchronously
-initializes local settings and stores, registers the eleven supported providers,
-creates one `AgentEngine` and one `AgentSessionManager`, wires narrow model and
-configuration capabilities, and returns the facade. Creation does not log in,
-validate credentials, refresh OAuth, or access a provider. The Agent returns
-serializable summaries, snapshots, and handles rather than concrete provider,
-engine, or Session objects.
+`createAgent()` is the separate composition root. It asynchronously initializes
+local settings and stores in the single per-user Agent Home (`~/.loopiq`),
+registers the eleven supported providers, creates one `AgentEngine` and one
+`AgentSessionManager`, wires narrow model and configuration capabilities, and
+returns the facade. Creation does not log in, validate credentials, refresh
+OAuth, or access a provider. The Agent returns serializable summaries,
+snapshots, and handles rather than concrete provider, engine, or Session
+objects.
 
 ## Internal AgentEngine
 
@@ -242,7 +243,7 @@ releasing its writer lease.
 The default layout is:
 
 ```text
-<dataDir>/
+~/.loopiq/
   agent.json
   credentials.json
   sessions/
@@ -251,10 +252,13 @@ The default layout is:
       runtime.lock
 ```
 
-The JSONL header's `cwd` is authoritative on resume. The manager reconstructs
-the environment and Store, then `AgentSession.load()` asks the Engine for model
-resolution and tool creation and restores the in-memory message context once
-before publishing the loaded instance.
+The JSONL header's normalized absolute `workspaceDir` is authoritative on
+resume. Creation and resume reject a missing or non-directory Workspace. The
+manager maps that path to `NodeExecutionEnv.cwd`, reconstructs the Store, then
+`AgentSession.load()` asks the Engine for model resolution and tool creation and
+restores the in-memory message context once before publishing the loaded
+instance. Agent Home contains Agent-owned state; it is never used as the
+Session's Workspace implicitly.
 
 ## Writer Lease
 
@@ -265,8 +269,8 @@ released on close, failed initialization, delete, or shutdown.
 The lease protects one Session JSONL file from duplicate writers. It does not
 lock the Session's working directory.
 
-The concrete shared-`cwd` mutation race, current optimistic safeguards, and the
-non-implemented process-wide coordination direction are maintained in
+The concrete shared-`workspaceDir` mutation race, current optimistic safeguards,
+and the non-implemented process-wide coordination direction are maintained in
 [`engineering-challenges.md`](./engineering-challenges.md#ec-001-concurrent-file-mutation-across-sessions).
 
 ## Runtime Configuration Persistence

@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last audited: 2026-07-26
+Last audited: 2026-07-27
 
 This document defines the public `Agent` lifecycle and its internal split
 between `AgentEngine`, `AgentRun`, `AgentSession`, and
@@ -189,7 +189,7 @@ metadata are not part of the Agent runtime configuration API.
 
 ## Provider Credentials
 
-Provider implementations are registered during `createAgent({ dataDir })`
+Provider implementations are registered during `createAgent()`
 without login or network access. Explicit Agent operations add, validate,
 replace, and remove credentials. API-token and OAuth UI are supplied through an
 adapter-neutral prompt/event interface.

@@ -98,6 +98,7 @@ export class AgentSession {
 	getSnapshot(): SessionSnapshot {
 		return {
 			id: this.id,
+			workspaceDir: this.store.metadata.workspaceDir,
 			state: this.state,
 			currentRunId: this.currentRun?.handle.runId,
 			model: { providerId: this.model.provider, modelId: this.model.id },

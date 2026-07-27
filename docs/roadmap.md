@@ -197,35 +197,54 @@ skill body by default.
 relative reference location, optional additional instructions, and resource
 snapshot behavior across turns.
 
-## 2. Dynamic system prompt and project instruction assembly
+## 2. Advanced Workspace grounding
 
-**Why**: The application currently supplies one fixed sentence as its default
-system prompt. Although skill formatting and a system-prompt callback already
-exist internally, the default Agent does not assemble its tools, tool usage
-guidance, project instructions, skills, or Session environment into the prompt.
-The model therefore receives much less operational context than the runtime
-actually provides.
+**Current baseline**: Agent-wide configuration, credentials, and Session JSONL
+live under the single per-user Agent Home (`~/.loopiq`). Each Session separately
+persists one normalized absolute `workspaceDir`; creation and resume reject a
+missing or non-directory Workspace. The Session `ExecutionEnv` already uses that
+directory as the relative-path base, but this is only path plumbing, not a full
+grounding or security model.
+
+**Why**: The model is not told which Workspace it is operating in, project
+instructions are not discovered, and the current environment accepts absolute
+paths outside the Workspace. The fixed one-sentence default System Prompt also
+does not describe the Agent's tools, resources, or Workspace policy.
 
 **Scope**:
 - Replace the fixed default string with an Agent-owned `buildSystemPrompt()`
-  pipeline whose inputs are explicit and testable: Session cwd, current date,
+  pipeline whose inputs are explicit and testable: Session `workspaceDir`,
+  current date,
   Engine-created tools, Agent resources, project instruction files, and optional
   Agent-owned replacement/append sources.
+- Inject a structured, model-visible environment context containing at least the
+  normalized Workspace path, shell, current date, timezone, and effective
+  filesystem/network policy. Send deterministic diffs when mutable environment
+  state changes instead of repeating unchanged content on every request.
 - Add optional `promptSnippet` and `promptGuidelines` metadata to `AgentTool`.
   Include only Engine-provided tools, deduplicate normalized guidelines, and keep full
   parameter documentation in tool schemas instead of repeating it in the
   system prompt.
 - Load project instructions from `AGENTS.md` (and deliberately supported
-  aliases) from the Session cwd and its ancestors with deterministic
+  aliases) from the Session Workspace to its project root with deterministic
   outer-to-inner precedence. Preserve each source path and wrap file contents in
   explicit structured boundaries so adjacent instruction files cannot blur
   together.
+- Replace the incidental `ExecutionEnv.cwd` convention with an explicit
+  Workspace-aware tool context. Relative Read, Write, Edit, Bash, Grep, Glob,
+  and ListDir operations must resolve from `workspaceDir`; any additional roots
+  must be explicit, normalized, and visible in the Run snapshot.
+- Define Workspace roots as the default filesystem permission boundary. Reject
+  absolute paths, symlink traversal, command working directories, and writes
+  that escape the authorized roots unless a separately designed permission
+  grant allows them.
 - Append the existing model-visible Skills block only when an Engine-owned tool can
   retrieve the referenced skill file. Keep disabled skills out of the prompt and
   preserve absolute skill locations for relative-reference resolution.
-- Add the current date in stable `YYYY-MM-DD` form and the normalized Session cwd
-  near the end of the prompt. Do not include current time, random identifiers,
-  or other values that unnecessarily invalidate provider prompt caches.
+- Add the current date in stable `YYYY-MM-DD` form and the normalized Session
+  Workspace near the end of the prompt. Do not include current time, random
+  identifiers, or other values that unnecessarily invalidate provider prompt
+  caches.
 - Build the prompt while capturing the Run snapshot. Engine-owned tool or
   project-instruction changes made during an active Run affect the next Run,
   not a later Provider request inside the current Run.
@@ -234,8 +253,8 @@ actually provides.
   base identities or independently concatenate prompt fragments.
 - Define replacement-versus-append precedence before supporting custom prompt
   files. Even a replacement prompt must retain explicitly selected project
-  instructions, Skills, date, and cwd unless the Agent configuration disables
-  those sections deliberately.
+  instructions, Skills, date, and Workspace context unless the Agent
+  configuration disables those sections deliberately.
 
 **Observability**: emit a structured prompt-build summary containing included
 section names, tool names, instruction source paths, skill names, and a prompt
@@ -245,8 +264,10 @@ prompt by default because they may contain sensitive local content.
 **Tests**: deterministic assembly and section ordering, included/excluded tool
 metadata, duplicate guideline removal, ancestor instruction precedence, XML
 escaping and boundaries, disabled or unreadable Skills, custom replacement and
-append precedence, cwd/date normalization, tool changes between Runs, and
-stable cacheable output for identical inputs on the same day.
+append precedence, Workspace/date normalization, missing or moved Workspaces,
+relative and absolute path escapes, symlink escapes, additional authorized
+roots, tool changes between Runs, and stable cacheable output for identical
+inputs on the same day.
 
 ## 3. Freeze structural configuration for the whole Run
 

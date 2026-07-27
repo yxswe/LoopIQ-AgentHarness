@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import type { FileError, FileSystem } from "../../base/env.ts";
 import type { AgentMessage } from "../../base/messages.ts";
 import type { SessionConfiguration } from "../../base/options.ts";
@@ -29,13 +30,13 @@ type SessionHeader = {
 	type: "session";
 	id: string;
 	timestamp: string;
-	cwd: string;
+	workspaceDir: string;
 };
 
 type SessionStoreMetadata = {
 	id: string;
 	createdAt: string;
-	cwd: string;
+	workspaceDir: string;
 	path: string;
 };
 
@@ -85,8 +86,11 @@ function parseHeaderLine(line: string, filePath: string): SessionHeader {
 	if (typeof parsed.timestamp !== "string" || !parsed.timestamp) {
 		throw invalidSession(filePath, "session header is missing timestamp");
 	}
-	if (typeof parsed.cwd !== "string" || !parsed.cwd) throw invalidSession(filePath, "session header is missing cwd");
-	return { type: "session", id: parsed.id, timestamp: parsed.timestamp, cwd: parsed.cwd };
+	if (typeof parsed.workspaceDir !== "string" || !parsed.workspaceDir) {
+		throw invalidSession(filePath, "session header is missing workspaceDir");
+	}
+	if (!isAbsolute(parsed.workspaceDir)) throw invalidSession(filePath, "session workspaceDir must be absolute");
+	return { type: "session", id: parsed.id, timestamp: parsed.timestamp, workspaceDir: parsed.workspaceDir };
 }
 
 function isSessionConfiguration(value: unknown): value is SessionConfiguration {
@@ -135,7 +139,7 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
 }
 
 function metadataFromHeader(header: SessionHeader, path: string): SessionStoreMetadata {
-	return { id: header.id, createdAt: header.timestamp, cwd: header.cwd, path };
+	return { id: header.id, createdAt: header.timestamp, workspaceDir: header.workspaceDir, path };
 }
 
 async function readStoreFile(
@@ -188,13 +192,14 @@ export class JsonlSessionStore {
 	static async create(
 		fs: SessionStoreFileSystem,
 		filePath: string,
-		options: { cwd: string; sessionId: string },
+		options: { workspaceDir: string; sessionId: string },
 	): Promise<JsonlSessionStore> {
+		if (!isAbsolute(options.workspaceDir)) throw invalidSession(filePath, "session workspaceDir must be absolute");
 		const header: SessionHeader = {
 			type: "session",
 			id: options.sessionId,
 			timestamp: new Date().toISOString(),
-			cwd: options.cwd,
+			workspaceDir: options.workspaceDir,
 		};
 		getFileResultOrThrow(
 			await fs.writeFile(filePath, `${JSON.stringify(header)}\n`),

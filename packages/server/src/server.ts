@@ -14,8 +14,7 @@ import { ProviderCredentialJobs } from "./provider-credential-jobs.ts";
 import { createDefaultRuntime } from "./runtime-factory.ts";
 
 const PORT = Number(process.env.DEVUI_PORT ?? 4100);
-const CWD = process.env.DEVUI_CWD ?? resolve(import.meta.dir, "../../..");
-const DATA_DIR = resolve(import.meta.dir, "../.data");
+const DEFAULT_WORKSPACE_DIR = resolve(process.env.DEVUI_WORKSPACE ?? resolve(import.meta.dir, "../../.."));
 const STATIC_DIR = process.env.DEVUI_STATIC_DIR ?? resolve(import.meta.dir, "../../devui/public");
 
 const CORS_HEADERS: Record<string, string> = {
@@ -27,8 +26,7 @@ const JSON_HEADERS = { "Content-Type": "application/json", ...CORS_HEADERS };
 const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key)$/i;
 
 const { agent, defaultSessionId, model } = await createDefaultRuntime({
-	dataDir: DATA_DIR,
-	cwd: CWD,
+	workspaceDir: DEFAULT_WORKSPACE_DIR,
 	defaultModel: process.env.DEVUI_MODEL ? parseModelReference(process.env.DEVUI_MODEL) : undefined,
 });
 const encoder = new TextEncoder();
@@ -261,7 +259,7 @@ Bun.serve({
 			if (url.pathname === "/api/sessions" && request.method === "POST") {
 				const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
 				const session = await agent.createSession({
-					cwd: typeof body.cwd === "string" ? body.cwd : CWD,
+					workspaceDir: typeof body.workspaceDir === "string" ? body.workspaceDir : DEFAULT_WORKSPACE_DIR,
 					model: parseModelReference(body.model),
 					thinkingLevel: typeof body.thinkingLevel === "string" ? (body.thinkingLevel as never) : undefined,
 				});

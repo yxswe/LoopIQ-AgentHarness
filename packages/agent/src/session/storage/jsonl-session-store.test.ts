@@ -28,7 +28,7 @@ describe("JsonlSessionStore", () => {
 
 	it("creates a file and reopens entries in append order", async () => {
 		const store = await JsonlSessionStore.create(env, sessionPath, {
-			cwd: directory,
+			workspaceDir: directory,
 			sessionId: "session-1",
 		});
 
@@ -39,8 +39,8 @@ describe("JsonlSessionStore", () => {
 		});
 
 		const lines = (await readFile(sessionPath, "utf8")).trim().split("\n").map(JSON.parse);
-		expect(lines[0]).toEqual(expect.objectContaining({ type: "session", id: "session-1", cwd: directory }));
-		expect(Object.keys(lines[0]).sort()).toEqual(["cwd", "id", "timestamp", "type"]);
+		expect(lines[0]).toEqual(expect.objectContaining({ type: "session", id: "session-1", workspaceDir: directory }));
+		expect(Object.keys(lines[0]).sort()).toEqual(["id", "timestamp", "type", "workspaceDir"]);
 		expect(lines.slice(1).map((entry) => entry.type)).toEqual(["message", "session_config"]);
 
 		const reopened = await JsonlSessionStore.open(env, sessionPath);
@@ -54,7 +54,7 @@ describe("JsonlSessionStore", () => {
 
 	it("returns restored state that cannot mutate the Store", async () => {
 		const store = await JsonlSessionStore.create(env, sessionPath, {
-			cwd: directory,
+			workspaceDir: directory,
 			sessionId: "session-2",
 		});
 		await store.appendMessage(userMessage("hello"));
@@ -75,7 +75,7 @@ describe("JsonlSessionStore", () => {
 
 	it("serializes concurrent appends", async () => {
 		const store = await JsonlSessionStore.create(env, sessionPath, {
-			cwd: directory,
+			workspaceDir: directory,
 			sessionId: "session-concurrent",
 		});
 
@@ -97,7 +97,7 @@ describe("JsonlSessionStore", () => {
 			type: "session",
 			id: "session-3",
 			timestamp: new Date().toISOString(),
-			cwd: directory,
+			workspaceDir: directory,
 		};
 		const message = {
 			type: "message",
@@ -138,11 +138,30 @@ describe("JsonlSessionStore", () => {
 		const original = `${JSON.stringify({
 			type: "session",
 			timestamp: new Date().toISOString(),
-			cwd: directory,
+			workspaceDir: directory,
 		})}\n`;
 		await writeFile(sessionPath, original);
 
 		await expect(JsonlSessionStore.open(env, sessionPath)).rejects.toThrow("session header is missing id");
 		expect(await readFile(sessionPath, "utf8")).toBe(original);
+	});
+
+	it("rejects missing and relative Workspace paths", async () => {
+		const baseHeader = {
+			type: "session",
+			id: "session-old-header",
+			timestamp: new Date().toISOString(),
+		};
+		await writeFile(sessionPath, `${JSON.stringify(baseHeader)}\n`);
+		await expect(JsonlSessionStore.open(env, sessionPath)).rejects.toThrow("missing workspaceDir");
+
+		await writeFile(sessionPath, `${JSON.stringify({ ...baseHeader, workspaceDir: "relative/path" })}\n`);
+		await expect(JsonlSessionStore.open(env, sessionPath)).rejects.toThrow("workspaceDir must be absolute");
+		await expect(
+			JsonlSessionStore.create(env, sessionPath, {
+				workspaceDir: "relative/path",
+				sessionId: "relative-workspace",
+			}),
+		).rejects.toThrow("workspaceDir must be absolute");
 	});
 });

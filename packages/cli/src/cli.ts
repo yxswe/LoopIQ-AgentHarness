@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { stderr, stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
@@ -38,12 +37,11 @@ interface ParsedOptions {
 	prompt?: string;
 	sessionId?: string;
 	newSession: boolean;
-	cwd: string;
+	workspaceDir: string;
 	model?: string;
 	thinking?: ThinkingLevel;
 	format: OutputFormat;
 	stdin: boolean;
-	dataDir: string;
 	target?: string;
 	authMethod?: "api_token" | "oauth";
 	providerRequest?: Partial<ProviderRequestPolicy>;
@@ -120,11 +118,10 @@ export function parseArgs(argv: string[]): ParsedOptions {
 		command,
 		target,
 		newSession: false,
-		cwd: process.cwd(),
+		workspaceDir: process.cwd(),
 		model: process.env.LOOPIQ_MODEL,
 		format: "text",
 		stdin: false,
-		dataDir: process.env.LOOPIQ_DATA_DIR ?? resolve(homedir(), ".loopiq"),
 	};
 	for (let index = 0; index < args.length; ) {
 		const argument = args[index]!;
@@ -132,11 +129,10 @@ export function parseArgs(argv: string[]): ParsedOptions {
 		else if (argument === "--new") {
 			options.newSession = true;
 			args.splice(index, 1);
-		} else if (argument === "--cwd") options.cwd = resolve(takeValue(args, index, argument));
+		} else if (argument === "--workspace") options.workspaceDir = resolve(takeValue(args, index, argument));
 		else if (argument === "--model") options.model = takeValue(args, index, argument);
 		else if (argument === "--thinking") options.thinking = takeValue(args, index, argument) as ThinkingLevel;
 		else if (argument === "--format") options.format = takeValue(args, index, argument) as OutputFormat;
-		else if (argument === "--data-dir") options.dataDir = resolve(takeValue(args, index, argument));
 		else if (argument === "--auth-method") {
 			options.authMethod = takeValue(args, index, argument) as "api_token" | "oauth";
 		} else if (argument === "--transport") {
@@ -231,7 +227,7 @@ function serializeResult(result: RunResult) {
 async function selectSession(options: ParsedOptions, agent: Agent): Promise<SessionSnapshot> {
 	if (options.sessionId) return agent.getSession(options.sessionId);
 	return agent.createSession({
-		cwd: options.cwd,
+		workspaceDir: options.workspaceDir,
 		model: options.model ? parseModelReference(options.model) : undefined,
 		thinkingLevel: options.thinking,
 	});
@@ -252,7 +248,7 @@ async function applySessionOverrides(options: ParsedOptions, agent: Agent, sessi
 async function runOnce(options: ParsedOptions): Promise<number> {
 	const prompt = options.stdin ? await readStdin() : options.prompt;
 	if (!prompt?.trim()) throw new Error("A non-empty prompt or --stdin is required");
-	const agent = await createAgent({ dataDir: options.dataDir });
+	const agent = await createAgent();
 	const session = await selectSession(options, agent);
 	const unsubscribe = await attachRenderer(agent, session.id, options.format);
 	await applySessionOverrides(options, agent, session);
@@ -277,7 +273,7 @@ async function runOnce(options: ParsedOptions): Promise<number> {
 }
 
 async function runChat(options: ParsedOptions): Promise<number> {
-	const agent = await createAgent({ dataDir: options.dataDir });
+	const agent = await createAgent();
 	const session = await selectSession(options, agent);
 	await applySessionOverrides(options, agent, session);
 	const unsubscribe = await attachRenderer(agent, session.id, options.format);
@@ -376,7 +372,7 @@ async function readSecret(message: string, signal?: AbortSignal): Promise<string
 }
 
 async function runManagementCommand(options: ParsedOptions): Promise<number> {
-	const agent = await createAgent({ dataDir: options.dataDir });
+	const agent = await createAgent();
 	try {
 		let value: unknown;
 		if (options.command === "sessions-list") value = await agent.listSessions();

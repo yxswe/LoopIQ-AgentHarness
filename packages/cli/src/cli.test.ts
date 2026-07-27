@@ -18,6 +18,7 @@ describe("CLI argument parsing", () => {
 	it("parses Session management commands", () => {
 		expect(parseArgs(["sessions", "delete", "session-id"]).target).toBe("session-id");
 		expect(parseArgs(["sessions", "list", "--format", "json"]).command).toBe("sessions-list");
+		expect(parseArgs(["sessions", "create", "--workspace", "."]).workspaceDir).toBe(process.cwd());
 	});
 
 	it("parses provider and configuration commands", () => {

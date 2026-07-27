@@ -23,7 +23,7 @@ async function createRuntimeWithStore(name: string, dependencies: ReturnType<typ
 	temporaryDirectories.push(directory);
 	const env = new NodeExecutionEnv({ cwd: directory });
 	const store = await JsonlSessionStore.create(env, join(directory, "session.jsonl"), {
-		cwd: directory,
+		workspaceDir: directory,
 		sessionId: name,
 	});
 	const session = await AgentSession.load({
@@ -127,7 +127,7 @@ describe("AgentSession", () => {
 		temporaryDirectories.push(directory);
 		const env = new NodeExecutionEnv({ cwd: directory });
 		const store = await JsonlSessionStore.create(env, join(directory, "session.jsonl"), {
-			cwd: directory,
+			workspaceDir: directory,
 			sessionId: "incremental-context",
 		});
 		const restore = vi.spyOn(store, "restore");

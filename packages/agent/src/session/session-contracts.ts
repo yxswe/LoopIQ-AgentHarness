@@ -29,6 +29,7 @@ export type AbortResult = {
 
 export type SessionSnapshot = {
 	id: string;
+	workspaceDir: string;
 	state: SessionState;
 	currentRunId?: string;
 	model: ModelReference;
@@ -36,7 +37,7 @@ export type SessionSnapshot = {
 };
 
 export type CreateSessionOptions = {
-	cwd: string;
+	workspaceDir: string;
 	model?: ModelReference;
 	thinkingLevel?: ThinkingLevel;
 };
@@ -48,7 +49,7 @@ export type UpdateSessionOptions = {
 
 export type SessionSummary = {
 	id: string;
-	cwd: string;
+	workspaceDir: string;
 	createdAt: string;
 	updatedAt: string;
 	loadedState: "unloaded" | SessionState;

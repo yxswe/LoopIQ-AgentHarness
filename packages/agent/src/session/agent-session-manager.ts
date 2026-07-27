@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Model } from "@loopiq/ai";
 import type { ModelReference, ThinkingLevel } from "../base/options.ts";
 import { AgentRuntimeError, normalizeRuntimeError, toError } from "../base/types.ts";
@@ -32,7 +32,7 @@ export class AgentSessionManager {
 	private readonly storeFileSystem: NodeExecutionEnv;
 
 	constructor(
-		dataDir: string,
+		agentHome: string,
 		engine: AgentEngine,
 		getSessionDefaults: () => { model: ModelReference; thinkingLevel: ThinkingLevel },
 		resolveSwitchableModel: (reference: ModelReference) => Promise<Model<any>>,
@@ -40,7 +40,7 @@ export class AgentSessionManager {
 		this.engine = engine;
 		this.getSessionDefaults = getSessionDefaults;
 		this.resolveSwitchableModel = resolveSwitchableModel;
-		this.sessionsDir = join(dataDir, "sessions");
+		this.sessionsDir = join(agentHome, "sessions");
 		this.storeFileSystem = new NodeExecutionEnv({ cwd: this.sessionsDir });
 	}
 
@@ -80,15 +80,16 @@ export class AgentSessionManager {
 	}
 
 	async create(options: CreateSessionOptions): Promise<AgentSession> {
+		const workspaceDir = await this.resolveWorkspaceDir(options.workspaceDir);
 		await mkdir(this.sessionsDir, { recursive: true });
 		const sessionId = randomUUID();
 		const sessionDir = this.sessionDir(sessionId);
 		await mkdir(sessionDir, { recursive: false });
 		const lease = await acquireSessionStoreLease(join(sessionDir, "runtime.lock"));
-		const env = new NodeExecutionEnv({ cwd: options.cwd });
+		const env = new NodeExecutionEnv({ cwd: workspaceDir });
 		try {
 			const store = await JsonlSessionStore.create(env, join(sessionDir, "session.jsonl"), {
-				cwd: options.cwd,
+				workspaceDir,
 				sessionId,
 			});
 			return await this.loadSession(env, store, lease, {
@@ -130,7 +131,7 @@ export class AgentSessionManager {
 				const snapshot = this.loaded.get(metadata.id)?.session.getSnapshot();
 				summaries.push({
 					id: metadata.id,
-					cwd: metadata.cwd,
+					workspaceDir: metadata.workspaceDir,
 					createdAt: metadata.createdAt,
 					updatedAt: fileStat.mtime.toISOString(),
 					loadedState: snapshot?.state ?? "unloaded",
@@ -209,7 +210,8 @@ export class AgentSessionManager {
 			if (metadata.id !== sessionId) {
 				throw new AgentRuntimeError("session", `Session directory ${sessionId} contains Session ${metadata.id}`);
 			}
-			env = new NodeExecutionEnv({ cwd: metadata.cwd });
+			const workspaceDir = await this.resolveWorkspaceDir(metadata.workspaceDir);
+			env = new NodeExecutionEnv({ cwd: workspaceDir });
 			const store = await JsonlSessionStore.open(env, sessionPath);
 			return await this.loadSession(env, store, lease);
 		} catch (error) {
@@ -241,5 +243,31 @@ export class AgentSessionManager {
 			throw new AgentRuntimeError("invalid_argument", "Invalid Session ID");
 		}
 		return join(this.sessionsDir, sessionId);
+	}
+
+	private async resolveWorkspaceDir(input: string): Promise<string> {
+		if (typeof input !== "string" || !input.trim()) {
+			throw new AgentRuntimeError("invalid_argument", "Workspace directory must not be empty");
+		}
+		const workspaceDir = resolve(input);
+		let workspaceStat: Awaited<ReturnType<typeof stat>>;
+		try {
+			workspaceStat = await stat(workspaceDir);
+		} catch (error) {
+			const cause = toError(error);
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "ENOENT") {
+				throw new AgentRuntimeError(
+					"invalid_argument",
+					`Workspace directory does not exist: ${workspaceDir}`,
+					cause,
+				);
+			}
+			throw new AgentRuntimeError("invalid_argument", `Cannot access Workspace directory: ${workspaceDir}`, cause);
+		}
+		if (!workspaceStat.isDirectory()) {
+			throw new AgentRuntimeError("invalid_argument", `Workspace path is not a directory: ${workspaceDir}`);
+		}
+		return workspaceDir;
 	}
 }

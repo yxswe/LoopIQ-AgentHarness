@@ -53,7 +53,7 @@ The first non-empty line is the Session header:
   "type": "session",
   "id": "session-id",
   "timestamp": "2026-07-18T00:00:00.000Z",
-  "cwd": "/workspace/project"
+  "workspaceDir": "/workspace/project"
 }
 ```
 
@@ -94,13 +94,14 @@ linear ordering.
 
 `JsonlSessionStore` enforces these invariants:
 
-1. Only `message` and `session_config` entries are accepted.
-2. Every entry has a non-empty unique ID and timestamp.
-3. Required type-specific fields are validated before an entry is accepted.
-4. Physical JSONL order is authoritative.
-5. `restore()` returns a new message array and a cloned configuration value.
-6. Appends are serialized inside one Store instance.
-7. A line is written successfully before the in-memory entry index is updated.
+1. The header requires one non-empty absolute `workspaceDir`.
+2. Only `message` and `session_config` entries are accepted.
+3. Every entry has a non-empty unique ID and timestamp.
+4. Required type-specific fields are validated before an entry is accepted.
+5. Physical JSONL order is authoritative.
+6. `restore()` returns a new message array and a cloned configuration value.
+7. Appends are serialized inside one Store instance.
+8. A line is written successfully before the in-memory entry index is updated.
 
 The per-Session `runtime.lock` prevents two processes from opening the same log
 for writes. It does not coordinate different Sessions that share a working
@@ -112,16 +113,19 @@ All adapter access goes through the thin `Agent` facade. Its internal
 `AgentSessionManager` owns this layout:
 
 ```text
-<dataDir>/sessions/<sessionId>/
+~/.loopiq/sessions/<sessionId>/
   session.jsonl
   runtime.lock
 ```
 
 The manager reads and validates the header before constructing the resumed
-`NodeExecutionEnv`; persisted `cwd` is authoritative. Loaded Sessions are
-single-flighted in-process. The writer lease is released on close, failed open,
-delete, or shutdown. A close rejected because the Session is busy retains both
-the loaded instance and its writer lease.
+`NodeExecutionEnv`; persisted `workspaceDir` is authoritative and must be an
+absolute path. Session creation normalizes a supplied relative or absolute path
+to an absolute path before writing the header. Creation and resume both require
+the path to exist and identify a directory. Loaded Sessions are single-flighted
+in-process. The writer lease is released on close, failed open, delete, or
+shutdown. A close rejected because the Session is busy retains both the loaded
+instance and its writer lease.
 
 `AgentSession.load()` then performs one load-time assembly:
 

@@ -1,8 +1,7 @@
 import { type Agent, createAgent, type ModelReference } from "@loopiq/agent";
 
 export interface CreateDevRuntimeOptions {
-	dataDir: string;
-	cwd: string;
+	workspaceDir: string;
 	defaultModel?: ModelReference;
 }
 
@@ -13,12 +12,13 @@ export interface DevRuntime {
 }
 
 export async function createDefaultRuntime(options: CreateDevRuntimeOptions): Promise<DevRuntime> {
-	const agent = await createAgent({ dataDir: options.dataDir });
+	const agent = await createAgent();
 	if (options.defaultModel) await agent.updateConfiguration({ defaultModel: options.defaultModel });
 	const configuration = await agent.getConfiguration();
 	const existing = await agent.listSessions();
-	const defaultSession = existing[0]
-		? await agent.getSession(existing[0].id)
-		: await agent.createSession({ cwd: options.cwd, model: configuration.defaultModel });
+	const matchingSession = existing.find((session) => session.workspaceDir === options.workspaceDir);
+	const defaultSession = matchingSession
+		? await agent.getSession(matchingSession.id)
+		: await agent.createSession({ workspaceDir: options.workspaceDir, model: configuration.defaultModel });
 	return { agent, defaultSessionId: defaultSession.id, model: defaultSession.model };
 }

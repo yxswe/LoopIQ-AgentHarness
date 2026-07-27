@@ -36,6 +36,14 @@
   ownership is unclear, fix the boundary instead of placing the file in a
   miscellaneous folder.
 
+# Code Simplicity
+
+- Keep implementations concise and keep simple logic with its existing owner.
+  Do not introduce a new module or standalone function unless it represents a
+  clear business responsibility, is genuinely reused, or materially reduces
+  the complexity of its caller. Avoid one-use wrappers and speculative
+  abstractions.
+
 # Language Rules
 
 - All conversational responses to the user MUST be written in Chinese.

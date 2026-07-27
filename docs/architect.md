@@ -117,9 +117,11 @@ and runtime model switching are documented in
   filesystem primitives shared by feature-owned stores. They import no model,
   Session, credential, or configuration types.
 
-`createAgent({ dataDir })` is asynchronous because it initializes local durable
-state. It performs no provider login, credential validation, token refresh, or
-other network request.
+`createAgent()` is asynchronous because it initializes local durable state in
+the single per-user Agent Home, `~/.loopiq`. It performs no provider login,
+credential validation, token refresh, or other network request. Tests may use
+an internal construction helper with a temporary Agent Home; this override is
+not part of the adapter-facing API.
 
 `agent.json` stores the Agent-wide default model, default thinking level, and
 safe Provider request policy (`transport`, timeout, Provider retry count and
@@ -216,14 +218,21 @@ invariants, evolution policy, and current limitations.
 - `session/storage/session-store-lease.ts` — exclusive `runtime.lock` writer lease
   preventing a second process from opening the same Session for writes.
 
-The default layout is:
+Agent Home and Workspace are separate. Agent-owned state uses this fixed layout:
 
 ```text
-<dataDir>/
+~/.loopiq/
   agent.json
   credentials.json
   sessions/<sessionId>/{session.jsonl,runtime.lock}
 ```
+
+Each Session header stores one normalized absolute `workspaceDir` that points to
+the user's project outside Agent Home. Session creation and resume verify that
+the path exists and is a directory. `NodeExecutionEnv.cwd` is initialized from
+that path so existing tools resolve relative paths from the Workspace. Rich
+model-visible environment context, project instruction discovery, explicit
+Workspace roots, and filesystem escape prevention remain roadmap work.
 
 The lock directories used for Agent settings and credentials exist only during
 mutations. Model and thinking level are stored in explicit `session_config`
@@ -278,7 +287,8 @@ prompts and diagnostics use stderr so machine-readable stdout stays clean.
 Provider list/add/remove, model list, and Agent configuration commands call
 Agent APIs. Configuration commands cover the default model, default thinking
 level, and Provider request policy. The CLI has no direct `@loopiq/ai`
-dependency.
+dependency. `--workspace` selects the Workspace for a new Session; the CLI
+cannot select another Agent Home.
 
 ## Package: `@loopiq/devui`
 
@@ -294,7 +304,7 @@ Subtle scenarios that span multiple owners, together with implemented
 safeguards, current gaps, and explicitly non-implemented directions, are tracked
 in [`techniquedocs/engineering-challenges.md`](./techniquedocs/engineering-challenges.md).
 The first maintained entry covers concurrent workspace-file mutation when
-different Sessions share one `cwd`.
+different Sessions share one `workspaceDir`.
 
 ## Agent control tool: `devui-control`
 

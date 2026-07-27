@@ -34,10 +34,6 @@ export type {
 	UpdateSessionOptions,
 };
 
-export interface AgentOptions {
-	dataDir: string;
-}
-
 export interface Agent {
 	createSession(options: CreateSessionOptions): Promise<SessionSnapshot>;
 	getSession(sessionId: string): Promise<SessionSnapshot>;

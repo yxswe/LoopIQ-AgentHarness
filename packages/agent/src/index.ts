@@ -3,7 +3,6 @@
 export type {
 	Agent,
 	AgentInput,
-	AgentOptions,
 	CreateSessionOptions,
 	RunHandle,
 	RunResult,

@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last reviewed: 2026-07-26
+Last reviewed: 2026-07-27
 
 This document defines the implemented ownership and persistence boundaries between
 the Agent, LLM providers, credentials, Sessions, the Server, and the CLI. It is
@@ -62,7 +62,7 @@ This created four problems:
 2. CLI and Server duplicate provider-specific setup and authentication policy.
 3. The two `FileCredentialStore` implementations already have different
    `modify()` semantics.
-4. A shared `dataDir` is not safe when CLI and Server refresh credentials at the
+4. A shared Agent Home is not safe when CLI and Server refresh credentials at the
    same time because the stores only serialize writes within one process.
 
 ## Runtime Structure
@@ -165,21 +165,20 @@ The supported-provider set is Agent application policy. Adding another
 built-in provider later changes this table and the Agent-owned registration
 list; it does not add provider assembly code to CLI or Server.
 
-### D3. `Models` is removed from the public Agent options
+### D3. Public Agent construction has no persistence-location option
 
 The public construction surface is:
 
 ```ts
-export interface AgentOptions {
-  dataDir: string;
-}
-
-export async function createAgent(options: AgentOptions): Promise<Agent>;
+export async function createAgent(): Promise<Agent>;
 ```
 
-The asynchronous factory may create directories, load Agent settings, and
-initialize stores. It must not authenticate, prompt, or perform an online model
-refresh.
+The asynchronous factory uses the single per-user Agent Home at `~/.loopiq`.
+Adapters cannot choose another persistence root. The factory may create
+directories, load Agent settings, and initialize stores. It must not
+authenticate, prompt, or perform an online model refresh. Tests may inject a
+temporary Agent Home through an internal helper that is not exported from the
+package entry.
 
 The concrete implementation class remains internal. The public `Agent`
 type is the adapter-facing application interface. This prevents adapters from
@@ -193,7 +192,7 @@ The public surface must not expose `Models`, `MutableModels`, `Provider`, or
 Agent construction performs only local initialization:
 
 ```text
-createAgent({ dataDir })
+createAgent()
   -> load current Agent settings
   -> construct the credential store
   -> construct Models
@@ -342,7 +341,7 @@ and is not a substitute for normal provider error handling during a run.
 The data layout is:
 
 ```text
-<dataDir>/
+~/.loopiq/
   agent.json
   agent.lock/
   credentials.json
@@ -363,6 +362,7 @@ Ownership is:
 | Safe Provider request policy | Agent settings | `agent.json` |
 | Provider credentials | Credential store | `credentials.json` |
 | Credential validation result | `ModelRuntime` | Memory only |
+| Session Workspace path | `AgentSessionManager` | `session.jsonl` header |
 | Current Session model | `AgentSession` | `session.jsonl` |
 | Session thinking level | `AgentSession` | `session.jsonl` |
 | Dynamic provider/model objects | `ModelRuntime` | Memory only |
@@ -526,7 +526,7 @@ Required properties:
 - `modify()` follows the `@loopiq/ai` contract: returning `undefined` means
   leave the current credential unchanged; deletion happens only through
   `delete()`.
-- Writes use a cross-process lock because CLI and Server may share `dataDir`.
+- Writes use a cross-process lock because CLI and Server share the Agent Home.
 - The lock covers the complete read-modify-write callback, including OAuth
   refresh, so two processes cannot refresh the same rotating token.
 - Writes use a temporary file followed by atomic replacement.
@@ -538,7 +538,7 @@ Required properties:
 
 Credentials are read from durable storage when needed rather than copied once
 into an Agent-lifetime cache. Therefore an Agent process can observe a login or
-refresh completed by another process sharing the same `dataDir`. Online
+refresh completed by another process sharing the same Agent Home. Online
 validation also compares the durable credential again under the store lock, so
 it never attaches an old credential's result to a concurrently replaced value.
 
@@ -664,7 +664,7 @@ tests.
 
 ```text
 CLI or Server
-  -> await createAgent({ dataDir })
+  -> await createAgent()
   -> Agent loads agent.json
   -> Agent creates ModelRuntime
   -> ModelRuntime registers all eleven supported providers
@@ -682,7 +682,7 @@ There is no login during startup.
 ### First startup without a credential
 
 ```text
-createAgent({ dataDir })
+createAgent()
   -> succeeds
 
 agent.listSessions()
@@ -706,7 +706,7 @@ agent.run(sessionId, input)
 ### Agent restart with persisted provider credentials
 
 ```text
-createAgent({ dataDir })
+createAgent()
   -> registers all eleven providers
   -> leaves credentials.json unchanged
   -> returns without prompting or online validation
@@ -779,7 +779,7 @@ agent.updateConfiguration({
   -> do not require or validate a credential
   -> atomically persist agent.json
 
-createSession({ cwd })
+createSession({ workspaceDir })
   -> uses the new default pair
 
 run(newSession)
@@ -919,7 +919,7 @@ added or changed under `packages/ai`.
 11. Update runtime documentation to mark the new ownership and flows as
     implemented.
 12. Run build, type checking, unit tests, CLI integration tests, Server tests,
-    and a shared-`dataDir` cross-process credential test.
+    and a shared-Agent-Home cross-process credential test.
 
 Future changes to this behavior must update
 [`multi-session-runtime.md`](./multi-session-runtime.md),
@@ -994,7 +994,7 @@ All recorded decisions below are implemented:
 
 - [x] D1 — One Agent per process and many Sessions per Agent.
 - [x] D2 — `ModelRuntime` owns provider/model behavior and registers the agreed eleven providers.
-- [x] D3 — Public Agent construction accepts only `dataDir` and becomes async.
+- [x] D3 — Public Agent construction is async, accepts no persistence-location option, and uses `~/.loopiq`.
 - [x] D4 — Agent construction performs no login or provider network access.
 - [x] D5 — `ModelRuntime` owns credential operations; the Agent facade exposes them and adapters provide interaction callbacks.
 - [x] D6 — Login is always explicit; a normal run never opens an interactive flow.

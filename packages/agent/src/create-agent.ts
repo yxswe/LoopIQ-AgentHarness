@@ -1,4 +1,6 @@
-import type { Agent, AgentOptions } from "./agent.ts";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { Agent } from "./agent.ts";
 import { createAgentFacade } from "./agent.ts";
 import { DEFAULT_PROVIDER_REQUEST_POLICY, type ModelReference } from "./base/options.ts";
 import type { AgentConfiguration } from "./configuration/agent-configuration.ts";
@@ -18,13 +20,17 @@ const COMPILED_DEFAULT_CONFIGURATION: AgentConfiguration = {
 
 const AGENT_SYSTEM_PROMPT = "You are a helpful coding agent running inside LoopIQ Agent.";
 
-export async function createAgent(options: AgentOptions): Promise<Agent> {
+export async function createAgent(): Promise<Agent> {
+	return createAgentInHome(join(homedir(), ".loopiq"));
+}
+
+async function createAgentInHome(agentHome: string): Promise<Agent> {
 	// FileAgentSettingsStore owns the durable Agent-wide configuration at
-	// `<dataDir>/agent.json`, including its mutation lock and atomic JSON replacement.
-	// For example, with `dataDir: "/Users/alice/.loopiq"`, this object reads and
-	// writes `/Users/alice/.loopiq/agent.json`. It does not keep provider credentials,
+	// `<agentHome>/agent.json`, including its mutation lock and atomic JSON replacement.
+	// The production Agent Home is always `~/.loopiq`, so this object reads and writes
+	// `~/.loopiq/agent.json`. It does not keep provider credentials,
 	// Session history, model objects, or any network client.
-	const settingsStore = new FileAgentSettingsStore(options.dataDir);
+	const settingsStore = new FileAgentSettingsStore(agentHome);
 
 	// `configuration` is the validated in-memory snapshot loaded from agent.json. It
 	// currently contains exactly three Agent-wide choices: a default model reference
@@ -35,7 +41,7 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 	// credential validation, catalog refresh, or other network operation.
 	const configuration = await settingsStore.loadOrCreate(COMPILED_DEFAULT_CONFIGURATION);
 
-	// FileCredentialStore owns `<dataDir>/credentials.json`, while ModelRuntime owns
+	// FileCredentialStore owns `<agentHome>/credentials.json`, while ModelRuntime owns
 	// all model-domain behavior above it. A newly constructed runtime has the eleven
 	// supported Provider definitions registered (for example GitHub Copilot, OpenAI,
 	// Anthropic, Google, and OpenRouter), the local credential store, Provider/model
@@ -43,32 +49,31 @@ export async function createAgent(options: AgentOptions): Promise<Agent> {
 	// removal, and the short-lived validation cache. `modelRuntime.models` is a narrow
 	// view of the same internal @loopiq/ai collection: AgentEngine can look up and
 	// stream models, but cannot add or remove Provider registrations.
-	const modelRuntime = new ModelRuntime({ credentials: new FileCredentialStore(options.dataDir) });
+	const modelRuntime = new ModelRuntime({ credentials: new FileCredentialStore(agentHome) });
 
 	// Ensure only that the configured reference exists in the already registered
 	// local catalog. Passing `false` deliberately prevents an online catalog refresh,
 	// so Agent construction remains local and does not require authentication.
 	await modelRuntime.resolveModel(configuration.defaultModel, false);
 
-	return composeAgent(options.dataDir, modelRuntime, configuration, settingsStore);
+	return composeAgent(agentHome, modelRuntime, configuration, settingsStore);
 }
 
-export async function createAgentForTesting(options: {
-	dataDir: string;
-	modelRuntime: ModelRuntime;
-	defaultModel: ModelReference;
-}): Promise<Agent> {
-	const settingsStore = new FileAgentSettingsStore(options.dataDir);
+export async function createAgentForTesting(
+	options: { agentHome: string } | { agentHome: string; modelRuntime: ModelRuntime; defaultModel: ModelReference },
+): Promise<Agent> {
+	if (!("modelRuntime" in options)) return createAgentInHome(options.agentHome);
+	const settingsStore = new FileAgentSettingsStore(options.agentHome);
 	const configuration = await settingsStore.loadOrCreate({
 		defaultModel: options.defaultModel,
 		defaultThinkingLevel: "high",
 		providerRequest: DEFAULT_PROVIDER_REQUEST_POLICY,
 	});
-	return composeAgent(options.dataDir, options.modelRuntime, configuration, settingsStore);
+	return composeAgent(options.agentHome, options.modelRuntime, configuration, settingsStore);
 }
 
 function composeAgent(
-	dataDir: string,
+	agentHome: string,
 	modelRuntime: ModelRuntime,
 	configuration: AgentConfiguration,
 	settingsStore: FileAgentSettingsStore,
@@ -96,13 +101,13 @@ function composeAgent(
 	});
 
 	// AgentSessionManager owns Session identity and lifecycle under
-	// `<dataDir>/sessions`. It discovers and opens JSONL stores, holds writer leases,
+	// `<agentHome>/sessions`. It discovers and opens JSONL stores, holds writer leases,
 	// creates a NodeExecutionEnv and one tool set per loaded Session, restores each
 	// Session's in-memory message/configuration state, routes run/steer/abort/events,
 	// and closes resources. The two callbacks keep Agent defaults and model-switch
 	// validation with their owning subsystems instead of duplicating that policy here.
 	const sessions = new AgentSessionManager(
-		dataDir,
+		agentHome,
 		engine,
 		() => settings.getSessionDefaults(),
 		(reference) => modelRuntime.resolveSwitchableModel(reference),

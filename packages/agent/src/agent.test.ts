@@ -12,11 +12,11 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import type { Agent } from "./agent.ts";
 import { DEFAULT_PROVIDER_REQUEST_POLICY } from "./base/options.ts";
-import { createAgent, createAgentForTesting } from "./create-agent.ts";
+import { createAgentForTesting } from "./create-agent.ts";
 import { ModelRuntime } from "./model/model-runtime.ts";
 
 const agents: Agent[] = [];
-const dataDirs: string[] = [];
+const agentHomes: string[] = [];
 
 function deferred() {
 	let resolve!: () => void;
@@ -60,12 +60,12 @@ class ControllableCredentialStore implements CredentialStore {
 
 afterEach(async () => {
 	await Promise.all(agents.splice(0).map((agent) => agent.shutdown({ abortRunning: true })));
-	await Promise.all(dataDirs.splice(0).map((dataDir) => rm(dataDir, { recursive: true, force: true })));
+	await Promise.all(agentHomes.splice(0).map((agentHome) => rm(agentHome, { recursive: true, force: true })));
 });
 
 async function createFixture(credentials: CredentialStore = new InMemoryCredentialStore()) {
-	const dataDir = await mkdtemp(join(tmpdir(), "loopiq-agent-"));
-	dataDirs.push(dataDir);
+	const agentHome = await mkdtemp(join(tmpdir(), "loopiq-agent-"));
+	agentHomes.push(agentHome);
 	const faux = fauxProvider({ provider: `agent-faux-${Math.random()}` });
 	const provider: Provider = {
 		...faux.provider,
@@ -87,7 +87,7 @@ async function createFixture(credentials: CredentialStore = new InMemoryCredenti
 		validator: async (_registration, credential) => ({ state: "valid" as const, credential }),
 	});
 	const agent = await createAgentForTesting({
-		dataDir,
+		agentHome,
 		modelRuntime,
 		defaultModel: { providerId: model.provider, modelId: model.id },
 	});
@@ -97,9 +97,9 @@ async function createFixture(credentials: CredentialStore = new InMemoryCredenti
 
 describe("Agent", () => {
 	it("initializes the supported providers and persists the application default", async () => {
-		const dataDir = await mkdtemp(join(tmpdir(), "loopiq-agent-default-"));
-		dataDirs.push(dataDir);
-		const first = await createAgent({ dataDir });
+		const agentHome = await mkdtemp(join(tmpdir(), "loopiq-agent-default-"));
+		agentHomes.push(agentHome);
+		const first = await createAgentForTesting({ agentHome });
 		agents.push(first);
 		expect((await first.listProviders()).map((provider) => provider.providerId)).toEqual([
 			"github-copilot",
@@ -127,7 +127,7 @@ describe("Agent", () => {
 		await first.shutdown();
 		agents.splice(agents.indexOf(first), 1);
 
-		const reopened = await createAgent({ dataDir });
+		const reopened = await createAgentForTesting({ agentHome });
 		agents.push(reopened);
 		expect(await reopened.getConfiguration()).toEqual({
 			defaultModel: { providerId: "openai", modelId: "gpt-4.1-mini" },
@@ -138,7 +138,8 @@ describe("Agent", () => {
 
 	it("applies the current Agent request policy to the next provider request", async () => {
 		const { agent, faux } = await createFixture();
-		const session = await agent.createSession({ cwd: process.cwd() });
+		const session = await agent.createSession({ workspaceDir: process.cwd() });
+		expect(session.workspaceDir).toBe(process.cwd());
 		expect(session.thinkingLevel).toBe("high");
 		const observedOptions: Array<Record<string, unknown>> = [];
 		faux.setResponses([
@@ -187,7 +188,7 @@ describe("Agent", () => {
 
 	it("owns Session lifecycle and runs through identity-based methods", async () => {
 		const { agent, faux } = await createFixture();
-		const session = await agent.createSession({ cwd: process.cwd() });
+		const session = await agent.createSession({ workspaceDir: process.cwd() });
 		const eventTypes: string[] = [];
 		const unsubscribe = await agent.subscribe(session.id, (envelope) => eventTypes.push(envelope.event.type));
 		faux.setResponses([fauxAssistantMessage("done")]);
@@ -205,7 +206,7 @@ describe("Agent", () => {
 
 	it("updates configuration and rejects stale run commands at the Agent boundary", async () => {
 		const { agent, faux, model } = await createFixture();
-		const session = await agent.createSession({ cwd: process.cwd() });
+		const session = await agent.createSession({ workspaceDir: process.cwd() });
 		const updated = await agent.updateSession(session.id, {
 			model: { providerId: model.provider, modelId: model.id },
 			thinkingLevel: "high",
@@ -220,7 +221,7 @@ describe("Agent", () => {
 
 	it("allows credential removal while the provider has an active run", async () => {
 		const { agent, faux } = await createFixture();
-		const session = await agent.createSession({ cwd: process.cwd() });
+		const session = await agent.createSession({ workspaceDir: process.cwd() });
 		const request = { started: deferred(), released: deferred() };
 		faux.setResponses([
 			async () => {
@@ -244,7 +245,7 @@ describe("Agent", () => {
 	it("returns a run handle before request-time credential resolution completes", async () => {
 		const credentials = new ControllableCredentialStore();
 		const { agent, faux } = await createFixture(credentials);
-		const session = await agent.createSession({ cwd: process.cwd() });
+		const session = await agent.createSession({ workspaceDir: process.cwd() });
 		faux.setResponses([fauxAssistantMessage("done")]);
 		const read = credentials.blockNextRead();
 
