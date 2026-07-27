@@ -1,5 +1,6 @@
 import type { AssistantMessage, ImageContent, Model, UserMessage } from "@loopiq/ai";
 
+/** Create the user message that starts or steers an AgentRun. */
 export function createUserMessage(text: string, images?: ImageContent[]): UserMessage {
 	const content: Array<{ type: "text"; text: string } | ImageContent> = [{ type: "text", text }];
 	if (images) content.push(...images);

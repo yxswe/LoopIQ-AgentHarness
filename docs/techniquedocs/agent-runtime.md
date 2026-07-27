@@ -2,48 +2,60 @@
 
 Status: Implemented behavior
 
-Last audited: 2026-07-25
+Last audited: 2026-07-26
 
 This document defines the public `Agent` lifecycle and its internal split
-between `AgentEngine`, `AgentRun`, `AgentSession`, and `NodeSessionHost`. The
+between `AgentEngine`, `AgentRun`, `AgentSession`, and
+`AgentSessionManager`. The
 detailed run algorithm is documented in [`agent-run.md`](./agent-run.md), and
 multi-Session ownership is documented in
 [`multi-session-runtime.md`](./multi-session-runtime.md).
 
 ## Ownership
 
-- `Agent` is the application composition root. Adapters call its identity-based
-  methods and never receive a concrete host, engine, or Session.
+- `Agent` is a thin adapter-facing facade. Each method delegates once to the
+  owner of that command and never receives a concrete engine or Session.
+- `createAgent()` is the composition root. It constructs and wires subsystems
+  but implements no runtime command workflow.
 - `ModelRuntime` owns the supported provider registry, model catalog, persisted
-  credentials, online validation state, and shared streaming capability.
-- `AgentEngine` is an internal Session-stateless capability created by
-  `createAgentEngine({ models })`. It retains no current Session or run.
+  credentials, same-Provider mutation exclusion, switchable-model policy,
+  online validation state, and shared model capabilities.
+- `AgentSettings` owns the loaded Agent configuration, update validation,
+  persistence ordering, Session defaults, and Provider request-policy view.
+- `AgentEngine` is an internal Session-stateless execution owner. It owns model
+  lookup/streaming, System Prompt policy, Skills and Prompt Templates, the tool
+  factory, Provider request policy, and Turn snapshot construction. It retains
+  no current Session or run.
 - Each `engine.run()` call creates one short-lived `AgentRun` containing mutable
   provider/tool-loop state for that request.
-- `AgentSession` owns one durable Session's storage, writer, environment, tools,
-  configuration, queues, hooks, event sequence, and active-run control.
-- Internal `NodeSessionHost` owns discovery, single-flight open, writer leases,
-  create/open/list/close/delete/shutdown, and per-Session tool construction.
+- `AgentSession` owns one loaded Session's Store, environment, tool instances,
+  incrementally maintained message context, configuration, steering queue, event
+  sequence, and active-run control.
+- Internal `AgentSessionManager` owns Session-facing commands, discovery,
+  single-flight open, writer leases, create/open/list/close/delete/shutdown, and
+  environment lifecycle.
 
 One `AgentSession` admits one structural run at a time. Different Sessions can
 call the same engine concurrently.
 
 ## Run Reservation and Identity
 
-`Agent.run(sessionId, input)` first resolves the internal Session and preflights
-its persisted provider credential. Missing credentials fail with
-`provider_auth_required`; expired OAuth credentials are refreshed and persisted
-through the credential-store lock. Before preflight, the Agent acquires an
-in-process provider-use guard that excludes explicit credential replacement and
-removal. The guard creates no run ID and is released on preflight failure or
-after the accepted run settles. Authentication failure creates no run ID.
-
-After preflight, the call to
-`AgentSession.startRun(input)` is synchronous: it validates input, creates a
+`Agent.run(sessionId, input)` delegates to `AgentSessionManager`, which resolves
+the internal Session and immediately calls `AgentSession.startRun(input)`. It
+does not inspect, validate, refresh, or reserve the selected Provider
+credential. `startRun()` is synchronous: it
+validates input, creates a
 unique `runId` and `AgentRunController`, changes the Session from `idle` to
 `running`, publishes the current handle, and only then starts asynchronous
-snapshot construction. The Agent method is asynchronous because Session open
-and authentication preflight may require I/O.
+snapshot construction. The Agent method is asynchronous only because opening an
+unloaded Session may require I/O.
+
+Authentication is resolved later by `@loopiq/ai` when an actual Provider request
+starts. Missing, revoked, or concurrently removed credentials therefore do not
+make `Agent.run()` reject before a handle exists. The request reports its normal
+Provider/authentication error through the Run result and `run_settled` event.
+An OAuth refresh, when required, also occurs on that request path and is
+persisted through the credential-store lock.
 
 This prevents two callers from passing an asynchronous idle check. The returned
 handle contains the durable `sessionId`, unique `runId`, and a result promise.
@@ -62,34 +74,38 @@ delayed command from a settled run is rejected with
 
 ## Turn Snapshots
 
-`AgentSession` constructs `TurnState` snapshots from:
+At Run start, `AgentSession` copies its in-memory message context once into
+`AgentRunInput`. Separately, it supplies mutable runtime selection to
+`AgentEngine`, which constructs `TurnState` snapshots from:
 
-- persisted Session context;
 - current model and thinking level;
-- copied stream options and resources;
-- current active tools;
-- the system-prompt string or provider callback;
+- the Engine-owned current Agent Provider request policy;
+- Engine-created Session tools;
+- the Engine-owned system-prompt string or callback, which may use Engine
+  resources while assembling the prompt;
 - the durable Session ID used for provider affinity.
 
-The engine receives the initial snapshot in `AgentRunInput`. At every successful
-turn save point it asks the run-bound port for a fresh snapshot. Configuration
-changes therefore affect a later provider request without mutating an in-flight
-request.
+The engine receives the initial messages and initial snapshot in
+`AgentRunInput`. `AgentRun` maintains those messages incrementally for the rest
+of the Run. At every successful Turn save point it asks the run-bound port for a
+fresh configuration snapshot without rebuilding or copying the full message
+history. Configuration changes therefore affect a later Provider request
+without mutating an in-flight request.
 
 System-prompt providers do not yet accept an `AbortSignal`. A run aborted during
 snapshot creation completes that callback, then enters the engine with an
-already-aborted signal.
+already-aborted run-control signal.
 
 ## Port Boundary
 
-`AgentRun` cannot access `Session`, `SessionWriter`, `MessageQueues`, or
-`AgentEventBus` directly. Its `AgentRunPort` provides only:
+`AgentRun` cannot access `AgentSession`, `JsonlSessionStore`, or `SteeringQueue`
+directly. Its `AgentRunPort` provides only:
 
-- next-turn, steering, and follow-up drains;
+- steering drain;
 - complete-message commit;
-- pending-write inspection and flush;
+- pending Session-state flush;
 - next-snapshot construction;
-- notification and hook dispatch.
+- notification dispatch.
 
 The port closure is bound to one `(sessionId, runId)` pair and validates the
 current run before every Session mutation or callback. Concurrent engine calls
@@ -100,29 +116,24 @@ therefore cannot select Session state through shared mutable engine fields.
 The implemented ordering is:
 
 1. `message_start` and assistant `message_update` are emitted as progress.
-2. A complete user, assistant, or tool-result message is appended to Session.
+2. A complete user, assistant, or tool-result message is appended to the JSONL
+   Store and then added to the loaded in-memory context.
 3. Only after append succeeds is `message_end` emitted.
 4. `turn_end` listeners are awaited while their error is captured.
-5. Pending writes are flushed even when a `turn_end` listener failed.
-6. A successful boundary emits `save_point` and flushes writes created there.
+5. Pending Session state is flushed even when a `turn_end` listener failed.
+6. A successful boundary emits `save_point` and flushes state created there.
 7. A fresh snapshot is built before another provider request.
 
 Persistence is an explicit port operation, not an event subscriber. Subscribers
 therefore observe committed transcript state.
 
-## Hook Reducers
+## Notifications
 
-`AgentEventBus.emitHook()` owns event-specific reduction:
-
-- `context`: sequential message transformation;
-- `before_agent_start`: message aggregation and system-prompt chaining;
-- `before_provider_request`: ordered stream-option patches with deletion;
-- `before_provider_payload`: sequential payload transformation;
-- `tool_call`: first blocking result wins;
-- `tool_result`: sequential patch accumulation;
-- `session_before_compact`: last meaningful result, with early cancel.
-
-The engine calls only the typed emitter and does not access handler storage.
+`AgentSession` dispatches read-only envelopes directly to its subscribers.
+There is no hook registration or return-valued interception channel in the
+current runtime. A future plugin system must introduce its registration API and
+execution semantics together instead of leaving unreachable hook contracts in
+the core loop.
 
 ## Steering and Abort
 
@@ -134,14 +145,14 @@ control channel to interrupt only an active provider inference. A provider's
 partial aborted assistant message is committed, the turn reaches a save point,
 steering is drained, and the same run continues.
 
-Whole-run abort clears steer/follow-up queues, preserves next-turn input, aborts
-the signal used by provider and tools, and waits for run settlement. It never
-converts into steering continuation.
+Whole-run abort clears queued steering, aborts the signal used by provider and
+tools, and waits for run settlement. It never converts into steering
+continuation.
 
 ## Settlement
 
 After the engine returns an `AgentRunOutcome`, `AgentSession` enters
-`settling`. It flushes remaining writes, creates the final `AgentRunResult`, and
+`settling`. It flushes remaining state, creates the final `RunResult`, and
 emits one correlated `run_settled` envelope. Terminal envelope delivery failure
 cannot recursively rewrite the already-final result.
 
@@ -151,20 +162,30 @@ therefore rejected instead of racing the old control channel.
 
 ## Runtime Configuration
 
-`Agent.updateSession()` resolves model references and, for model changes,
-requires a persisted credential with a current successful online validation.
+`Agent.updateSession()` delegates to `AgentSessionManager`. For model changes,
+the manager asks the narrow `ModelRuntime.resolveSwitchableModel()` capability
+to require a persisted credential with a current successful online validation.
 The provider/model reference changes atomically; changing a provider alone is
-not representable. `NodeSessionHost` appends complete `loopiq.session_config`
-custom entries. The latest valid entry restores provider/model, thinking level,
-and active tool names. Configuration entries are excluded from model context.
-Changes made while running are queued on `SessionWriter` and flushed at the next
-save point; idle changes flush before returning.
+not representable. `AgentSession` appends complete `session_config` entries
+through `JsonlSessionStore`. The latest valid entry restores provider/model and
+thinking level. Configuration entries are excluded from model context. Changes
+made while running replace one pending configuration snapshot and flush at the
+next save point; idle changes append before returning.
 
-The Agent-wide default is an atomic provider/model pair in `agent.json`.
-`updateConfiguration()` validates registration and catalog membership but does
-not require a credential. It affects new Sessions only. A new Session can
-therefore be configured before its provider credential is supplied; its run
-fails preflight until the credential exists.
+`AgentSettings` owns the loaded snapshot whose durable `agent.json` form contains
+the atomic default provider/model pair,
+the default thinking level (`high` when first created), and the safe Provider
+request policy. Default model and thinking changes affect only new Sessions;
+existing Sessions retain their JSONL-persisted values. A default model update
+validates registration and catalog membership but does not require a credential,
+so its actual Provider request may still fail until a credential is supplied.
+
+Provider request policy is process-wide rather than Session-persisted. It
+contains transport, timeout, Provider retry count, retry-delay cap, and cache
+retention. `updateConfiguration()` updates the policy snapshot and `agent.json`;
+every turn snapshot reads the current value, so the next Provider request sees
+the update while an in-flight request remains unchanged. Request headers and
+metadata are not part of the Agent runtime configuration API.
 
 ## Provider Credentials
 
@@ -181,17 +202,20 @@ A replacement by another process invalidates the cached result. Removing a
 credential leaves provider registration, the global default, and Session
 configuration unchanged.
 
-Credential replacement/removal returns `provider_busy` while an active run uses
-that provider or is preflighting its authentication. Credential mutation also
-holds an exclusive in-process guard for the complete login, validation, and
-persistence operation, so new runs cannot enter preflight midway through a
-replacement or removal. This prevents account or authentication changes between
-provider calls within one run.
+`ModelRuntime` owns credential replacement/removal and keeps it deliberately
+independent from active Runs.
+A request that already resolved authentication may finish with the old
+credential; a later request observes the replacement or removal and succeeds or
+fails naturally. The Agent does not attempt to preserve one credential identity
+for an entire Run. It only serializes overlapping explicit credential mutations
+for the same Provider so two login/removal operations do not overwrite each
+other unpredictably.
 
 ## Current Limitations
 
-- Automatic compaction is not integrated into `AgentRun` yet.
-- Provider retry remains delegated to provider stream options.
+- Context compaction is not implemented.
+- Agent configuration controls Provider/SDK retry attempts, while higher-level
+  Agent retry remains unimplemented.
 - Credential validation currently uses a catalog model for a minimal
   authenticated request and can consume billable tokens.
 - A valid provider credential does not guarantee account entitlement to every
@@ -199,13 +223,13 @@ provider calls within one run.
 - In-flight provider/tool work is not recoverable after process crash.
 - The Node writer lease is an exclusive local lock file; stale-lock recovery is
   not implemented.
-- Full hook source metadata, cleanup scopes, and configurable hook error modes
-  are not implemented.
 - One Session does not admit multiple simultaneous AgentRuns.
 
 ## Tests
 
 Co-located tests cover the Agent facade, concurrent Sessions, synchronous busy
 reservation, stale-command rejection, run-correlated envelopes,
-inference-only steering, event-specific hook reducers, host single-flight open,
-config restore, writer lease contention, and running close/delete rejection.
+inference-only steering, manager single-flight open, config restore, writer
+lease contention, and running close/delete rejection.
+Credential tests also cover request-time resolution and removal during an
+active Run.

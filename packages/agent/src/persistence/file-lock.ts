@@ -55,7 +55,7 @@ async function recoverStaleLock(lockPath: string): Promise<boolean> {
 	}
 }
 
-export async function withNodeFileLock<T>(
+export async function withFileLock<T>(
 	lockPath: string,
 	task: () => Promise<T>,
 	options?: { timeoutMs?: number },

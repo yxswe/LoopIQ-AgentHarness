@@ -1,72 +1,49 @@
-import type { Model, SimpleStreamOptions, Transport } from "@loopiq/ai";
-import type { Session } from "../session/session.ts";
+import type { Model } from "@loopiq/ai";
 import type { ExecutionEnv } from "./env.ts";
 import type { AgentMessage } from "./messages.ts";
-import type { AgentResources, AgentTool, PromptTemplate, Skill } from "./resource.ts";
+import type { AgentResources, AgentTool } from "./resource.ts";
 
-/**
- * Controls how many queued user messages are injected when the agent loop reaches a queue drain point.
- *
- * - "all": drain and inject every queued message at that point.
- * - "one-at-a-time": drain and inject only the oldest queued message, leaving the rest queued for later drain points.
- */
-export type QueueMode = "all" | "one-at-a-time";
+export interface ModelReference {
+	providerId: string;
+	modelId: string;
+}
 
-/** Curated provider request options owned by the Session and snapshotted per turn. */
-export interface AgentStreamOptions {
-	/** Preferred transport forwarded to the stream function. */
-	transport?: Transport;
+/** Safe, serializable Agent policy applied to every provider request. */
+export type ProviderTransport = "sse" | "websocket" | "websocket-cached" | "auto";
+export type ProviderCacheRetention = "none" | "short" | "long";
+
+export interface ProviderRequestPolicy {
+	/** Preferred transport for providers that support more than one transport. */
+	transport: ProviderTransport;
 	/** Provider request timeout in milliseconds. */
-	timeoutMs?: number;
-	/** Maximum provider retry attempts. */
-	maxRetries?: number;
-	/** Optional cap for provider-requested retry delays. */
-	maxRetryDelayMs?: number;
-	/** Additional request headers merged with auth and lifecycle headers. */
-	headers?: Record<string, string>;
-	/** Provider metadata forwarded with requests. */
-	metadata?: SimpleStreamOptions["metadata"];
-	/** Provider cache retention hint. */
-	cacheRetention?: SimpleStreamOptions["cacheRetention"];
+	timeoutMs: number;
+	/** Maximum provider/SDK retry attempts. */
+	maxRetries: number;
+	/** Maximum server-requested retry delay. Zero disables the cap. */
+	maxRetryDelayMs: number;
+	/** Provider prompt-cache retention preference. */
+	cacheRetention: ProviderCacheRetention;
 }
 
-/** Per-request stream option patch returned by provider hooks. */
-export interface AgentStreamOptionsPatch extends Omit<Partial<AgentStreamOptions>, "headers" | "metadata"> {
-	/** Header patch. `undefined` values delete keys; explicit `headers: undefined` clears all headers. */
-	headers?: Record<string, string | undefined>;
-	/** Metadata patch. `undefined` values delete keys; explicit `metadata: undefined` clears all metadata. */
-	metadata?: Record<string, unknown | undefined>;
-}
+/** Compiled policy used when agent.json does not exist yet. */
+export const DEFAULT_PROVIDER_REQUEST_POLICY: ProviderRequestPolicy = {
+	transport: "auto",
+	timeoutMs: 300_000,
+	maxRetries: 0,
+	maxRetryDelayMs: 60_000,
+	cacheRetention: "short",
+};
 
-export interface AgentSessionConfig<
-	TSkill extends Skill = Skill,
-	TPromptTemplate extends PromptTemplate = PromptTemplate,
-	TTool extends AgentTool = AgentTool,
-> {
-	tools?: TTool[];
-	/**
-	 * Concrete resources available to explicit invocation methods and system-prompt callbacks.
-	 * Fixed at construction time; there is no runtime setter.
-	 */
-	resources?: AgentResources<TSkill, TPromptTemplate>;
-	systemPrompt?:
-		| string
-		| ((context: {
-				env: ExecutionEnv;
-				session: Session;
-				model: Model<any>;
-				thinkingLevel: ThinkingLevel;
-				activeTools: TTool[];
-				resources: AgentResources<TSkill, TPromptTemplate>;
-		  }) => string | Promise<string>);
-	/** Curated stream/provider request options. Snapshotted at turn start. */
-	streamOptions?: AgentStreamOptions;
-	model: Model<any>;
-	thinkingLevel?: ThinkingLevel;
-	activeToolNames?: string[];
-	steeringMode?: QueueMode;
-	followUpMode?: QueueMode;
-}
+export type AgentSystemPrompt =
+	| string
+	| ((context: {
+			env: ExecutionEnv;
+			sessionId: string;
+			model: Model<any>;
+			thinkingLevel: ThinkingLevel;
+			tools: AgentTool[];
+			resources: AgentResources;
+	  }) => string | Promise<string>);
 
 /**
  * Thinking/reasoning level for models that support it.
@@ -74,6 +51,11 @@ export interface AgentSessionConfig<
  * from @loopiq/ai to detect support for a concrete model.
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export type SessionConfiguration = {
+	model: ModelReference;
+	thinkingLevel: ThinkingLevel;
+};
 
 /** Context snapshot passed into the low-level agent loop. */
 export interface AgentContext {

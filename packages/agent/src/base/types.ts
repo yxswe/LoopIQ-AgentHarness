@@ -11,17 +11,6 @@ export function err<TValue, TError>(error: TError): Result<TValue, TError> {
 	return { ok: false, error };
 }
 
-/** Return the success value or throw the failure error. Intended for tests and explicit adapter boundaries. */
-export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TValue {
-	if (!result.ok) throw result.error;
-	return result.value;
-}
-
-/** Return the success value or `undefined`. Only object values are allowed to avoid truthiness bugs with primitives. */
-export function getOrUndefined<TValue extends object, TError>(result: Result<TValue, TError>): TValue | undefined {
-	return result.ok ? result.value : undefined;
-}
-
 /** Normalize unknown thrown values into Error instances before using them as typed error causes. */
 export function toError(error: unknown): Error {
 	if (error instanceof Error) return error;
@@ -33,22 +22,7 @@ export function toError(error: unknown): Error {
 	}
 }
 
-/** Stable compaction error codes returned by compaction helpers. */
-export type CompactionErrorCode = "aborted" | "summarization_failed" | "invalid_session" | "unknown";
-
-/** Error returned by compaction helpers. */
-export class CompactionError extends Error {
-	/** Backend-independent error code. */
-	public code: CompactionErrorCode;
-
-	constructor(code: CompactionErrorCode, message: string, cause?: Error) {
-		super(message, cause === undefined ? undefined : { cause });
-		this.name = "CompactionError";
-		this.code = code;
-	}
-}
-
-export type SessionErrorCode = "not_found" | "invalid_session" | "invalid_entry" | "storage" | "unknown";
+export type SessionErrorCode = "not_found" | "invalid_session" | "invalid_entry" | "storage";
 
 /** Error thrown by session storage and session operations. */
 export class SessionError extends Error {
@@ -69,7 +43,6 @@ export type AgentRuntimeErrorCode =
 	| "provider_not_found"
 	| "model_not_found"
 	| "provider_auth_required"
-	| "provider_auth_failed"
 	| "provider_credential_invalid"
 	| "provider_validation_unavailable"
 	| "provider_credential_canceled"
@@ -78,10 +51,7 @@ export type AgentRuntimeErrorCode =
 	| "credential_store"
 	| "agent_configuration"
 	| "session"
-	| "hook"
-	| "auth"
 	| "session_locked"
-	| "compaction"
 	| "unknown";
 
 /** Public agent runtime failure with a stable top-level classification. */
@@ -100,11 +70,5 @@ export function normalizeRuntimeError(error: unknown, fallbackCode: AgentRuntime
 	if (error instanceof AgentRuntimeError) return error;
 	const cause = toError(error);
 	if (cause instanceof SessionError) return new AgentRuntimeError("session", cause.message, cause);
-	if (cause instanceof CompactionError) return new AgentRuntimeError("compaction", cause.message, cause);
 	return new AgentRuntimeError(fallbackCode, cause.message, cause);
-}
-
-/** Normalize an error thrown by a subscriber/hook handler into a "hook"-coded {@link AgentRuntimeError}. */
-export function normalizeHookError(error: unknown): AgentRuntimeError {
-	return normalizeRuntimeError(error, "hook");
 }

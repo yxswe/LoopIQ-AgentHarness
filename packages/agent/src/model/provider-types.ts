@@ -1,4 +1,4 @@
-import type { ModelReference } from "../runtime/persisted-session-config.ts";
+import type { ModelReference } from "../base/options.ts";
 
 export type ProviderAuthMethod = "api_token" | "oauth";
 export type ProviderCredentialState = "missing" | "unchecked" | "valid" | "invalid" | "unavailable";
@@ -57,12 +57,4 @@ export interface ProviderLoginInteraction {
 export interface AddProviderCredentialOptions {
 	method: ProviderAuthMethod;
 	interaction: ProviderLoginInteraction;
-}
-
-export interface AgentConfiguration {
-	defaultModel: ModelReference;
-}
-
-export interface AgentConfigurationUpdate {
-	defaultModel: ModelReference;
 }

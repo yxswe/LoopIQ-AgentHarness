@@ -1,16 +1,6 @@
 import type { AssistantMessage, ImageContent, TextContent, Tool } from "@loopiq/ai";
 import type { Static, TSchema } from "typebox";
 
-/**
- * Configuration for how tool calls from a single assistant message are executed.
- *
- * - "sequential": each tool call is prepared, executed, and finalized before the next one starts.
- * - "parallel": tool calls are prepared sequentially, then allowed tools execute concurrently.
- *   `tool_execution_end` is emitted in tool completion order after each tool is finalized,
- *   while tool-result message artifacts are emitted later in assistant source order.
- */
-export type ToolExecutionMode = "sequential" | "parallel";
-
 /** A single tool call content block emitted by an assistant message. */
 export type AgentToolCall = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
 
@@ -51,14 +41,6 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<TDetails>,
 	) => Promise<AgentToolResult<TDetails>>;
-	/**
-	 * Per-tool execution mode override.
-	 * - "sequential": this tool must execute one at a time with other tool calls.
-	 * - "parallel": this tool can execute concurrently with other tool calls.
-	 *
-	 * If omitted, the default execution mode applies.
-	 */
-	executionMode?: ToolExecutionMode;
 }
 
 /**

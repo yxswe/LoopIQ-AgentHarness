@@ -8,50 +8,35 @@ import type {
 	ToolResultMessage,
 } from "@loopiq/ai";
 import type { AgentRunEvent } from "../base/events.ts";
-import { type AgentMessage, convertToLlm } from "../base/messages.ts";
-import type { AgentContext, AgentStreamOptions } from "../base/options.ts";
-import type { AgentTool, PromptTemplate, Skill } from "../base/resource.ts";
+import type { AgentMessage } from "../base/messages.ts";
+import type { AgentContext } from "../base/options.ts";
 import { AgentRuntimeError, toError } from "../base/types.ts";
-import { createFailureMessage, createUserMessage } from "../core/message-factory.ts";
-import { cloneStreamOptions } from "../core/stream-options.ts";
-import { executeToolCalls } from "../core/tool-execution.ts";
-import { buildContext, type TurnState } from "../core/turn-state.ts";
 import type { AgentRunControlView, InferenceInterruptReason } from "./agent-run-control.ts";
 import type { AgentRunOutcome } from "./agent-run-outcome.ts";
 import type { AgentRunPort } from "./agent-run-port.ts";
+import { createFailureMessage, createUserMessage } from "./message-factory.ts";
+import { executeToolCalls } from "./tool-execution.ts";
+import { createAgentContext, type TurnState } from "./turn-state.ts";
 
 export interface AgentUserInput {
 	text: string;
 	images?: ImageContent[];
 }
 
-export interface AgentRunInput<
-	TSkill extends Skill = Skill,
-	TPromptTemplate extends PromptTemplate = PromptTemplate,
-	TTool extends AgentTool = AgentTool,
-> {
+export interface AgentRunInput extends AgentUserInput {
 	sessionId: string;
-	runId: string;
-	input: AgentUserInput;
-	initialSnapshot: TurnState<TSkill, TPromptTemplate, TTool>;
+	initialMessages: AgentMessage[];
+	initialSnapshot: TurnState;
 	control: AgentRunControlView;
 }
 
-export class AgentRun<
-	TSkill extends Skill = Skill,
-	TPromptTemplate extends PromptTemplate = PromptTemplate,
-	TTool extends AgentTool = AgentTool,
-> {
-	private activeSnapshot: TurnState<TSkill, TPromptTemplate, TTool>;
+export class AgentRun {
+	private activeSnapshot: TurnState;
 	private readonly models: Pick<Models, "streamSimple">;
-	private readonly input: AgentRunInput<TSkill, TPromptTemplate, TTool>;
-	private readonly port: AgentRunPort<TSkill, TPromptTemplate, TTool>;
+	private readonly input: AgentRunInput;
+	private readonly port: AgentRunPort;
 
-	constructor(
-		models: Pick<Models, "streamSimple">,
-		input: AgentRunInput<TSkill, TPromptTemplate, TTool>,
-		port: AgentRunPort<TSkill, TPromptTemplate, TTool>,
-	) {
+	constructor(models: Pick<Models, "streamSimple">, input: AgentRunInput, port: AgentRunPort) {
 		this.models = models;
 		this.input = input;
 		this.port = port;
@@ -87,28 +72,9 @@ export class AgentRun<
 	}
 
 	private async run(): Promise<AgentMessage[]> {
-		let prompts: AgentMessage[] = [createUserMessage(this.input.input.text, this.input.input.images)];
-		const queued = await this.port.takeNextTurn();
-		if (queued.length > 0) prompts = [...queued, prompts[0]!];
-
-		const beforeResult = await this.port.emitHook(
-			{
-				type: "before_agent_start",
-				prompt: this.input.input.text,
-				images: this.input.input.images,
-				systemPrompt: this.activeSnapshot.systemPrompt,
-				resources: this.activeSnapshot.resources,
-			},
-			this.input.control.runSignal,
-		);
-		if (beforeResult?.messages) prompts = [...prompts, ...beforeResult.messages];
-
+		const prompts: AgentMessage[] = [createUserMessage(this.input.text, this.input.images)];
 		const newMessages: AgentMessage[] = [...prompts];
-		const initialContext = buildContext(this.activeSnapshot, beforeResult?.systemPrompt);
-		const currentContext: AgentContext = {
-			...initialContext,
-			messages: [...initialContext.messages, ...prompts],
-		};
+		const currentContext = createAgentContext(this.activeSnapshot, [...this.input.initialMessages, ...prompts]);
 
 		try {
 			await this.handleAgentEvent({ type: "agent_start" });
@@ -140,76 +106,62 @@ export class AgentRun<
 		let firstTurn = true;
 		let pendingMessages = await this.port.drainSteering();
 
-		while (true) {
-			let hasMoreToolCalls = true;
-			while (hasMoreToolCalls || pendingMessages.length > 0) {
-				if (!firstTurn) await this.handleAgentEvent({ type: "turn_start" });
-				else firstTurn = false;
+		let hasMoreToolCalls = true;
+		while (hasMoreToolCalls || pendingMessages.length > 0) {
+			if (!firstTurn) await this.handleAgentEvent({ type: "turn_start" });
+			else firstTurn = false;
 
-				if (pendingMessages.length > 0) {
-					for (const message of pendingMessages) {
-						await this.handleAgentEvent({ type: "message_start", message });
-						await this.handleAgentEvent({ type: "message_end", message });
-						currentContext.messages.push(message);
-						newMessages.push(message);
-					}
-					pendingMessages = [];
+			if (pendingMessages.length > 0) {
+				for (const message of pendingMessages) {
+					await this.handleAgentEvent({ type: "message_start", message });
+					await this.handleAgentEvent({ type: "message_end", message });
+					currentContext.messages.push(message);
+					newMessages.push(message);
 				}
+				pendingMessages = [];
+			}
 
-				const streamed = await this.streamAssistant(currentContext, model, reasoning);
-				const message = streamed.message;
-				newMessages.push(message);
-				if (streamed.interruptReason === "steer" && !this.input.control.runSignal.aborted) {
-					await this.handleAgentEvent({ type: "turn_end", message, toolResults: [] });
-					await this.refreshSnapshot();
-					currentContext = buildContext(this.activeSnapshot);
-					model = this.activeSnapshot.model;
-					reasoning = this.reasoningForSnapshot();
-					pendingMessages = await this.port.drainSteering();
-					hasMoreToolCalls = false;
-					continue;
-				}
-
-				if (message.stopReason === "error" || message.stopReason === "aborted") {
-					await this.handleAgentEvent({ type: "turn_end", message, toolResults: [] });
-					await this.handleAgentEvent({ type: "agent_end", messages: newMessages });
-					return;
-				}
-
-				const toolCalls = message.content.filter((content) => content.type === "toolCall");
-				const toolResults: ToolResultMessage[] = [];
-				hasMoreToolCalls = false;
-				if (toolCalls.length > 0) {
-					const executed = await executeToolCalls(
-						currentContext,
-						message,
-						undefined,
-						this.input.control.runSignal,
-						(event) => this.handleAgentEvent(event),
-						(event) => this.port.emitHook(event, this.input.control.runSignal),
-					);
-					toolResults.push(...executed.messages);
-					hasMoreToolCalls = !executed.terminate;
-					for (const result of toolResults) {
-						currentContext.messages.push(result);
-						newMessages.push(result);
-					}
-				}
-
-				await this.handleAgentEvent({ type: "turn_end", message, toolResults });
+			const streamed = await this.streamAssistant(currentContext, model, reasoning);
+			const message = streamed.message;
+			newMessages.push(message);
+			if (streamed.interruptReason === "steer" && !this.input.control.runSignal.aborted) {
+				await this.handleAgentEvent({ type: "turn_end", message, toolResults: [] });
 				await this.refreshSnapshot();
-				currentContext = buildContext(this.activeSnapshot);
+				currentContext = createAgentContext(this.activeSnapshot, currentContext.messages);
 				model = this.activeSnapshot.model;
 				reasoning = this.reasoningForSnapshot();
 				pendingMessages = await this.port.drainSteering();
-			}
-
-			const followUpMessages = await this.port.drainFollowUp();
-			if (followUpMessages.length > 0) {
-				pendingMessages = followUpMessages;
+				hasMoreToolCalls = false;
 				continue;
 			}
-			break;
+
+			if (message.stopReason === "error" || message.stopReason === "aborted") {
+				await this.handleAgentEvent({ type: "turn_end", message, toolResults: [] });
+				await this.handleAgentEvent({ type: "agent_end", messages: newMessages });
+				return;
+			}
+
+			const toolCalls = message.content.filter((content) => content.type === "toolCall");
+			const toolResults: ToolResultMessage[] = [];
+			hasMoreToolCalls = false;
+			if (toolCalls.length > 0) {
+				const executed = await executeToolCalls(currentContext, message, this.input.control.runSignal, (event) =>
+					this.handleAgentEvent(event),
+				);
+				toolResults.push(...executed.messages);
+				hasMoreToolCalls = !executed.terminate;
+				for (const result of toolResults) {
+					currentContext.messages.push(result);
+					newMessages.push(result);
+				}
+			}
+
+			await this.handleAgentEvent({ type: "turn_end", message, toolResults });
+			await this.refreshSnapshot();
+			currentContext = createAgentContext(this.activeSnapshot, currentContext.messages);
+			model = this.activeSnapshot.model;
+			reasoning = this.reasoningForSnapshot();
+			pendingMessages = await this.port.drainSteering();
 		}
 
 		await this.handleAgentEvent({ type: "agent_end", messages: newMessages });
@@ -220,8 +172,8 @@ export class AgentRun<
 	}
 
 	private async refreshSnapshot(): Promise<void> {
-		await this.port.flushPendingWrites();
-		this.activeSnapshot = await this.port.createTurnSnapshot(this.input.control.runSignal);
+		await this.port.flushPendingSessionState();
+		this.activeSnapshot = await this.port.createTurnSnapshot();
 	}
 
 	private async streamAssistant(
@@ -229,56 +181,25 @@ export class AgentRun<
 		model: Model<any>,
 		reasoning: SimpleStreamOptions["reasoning"],
 	): Promise<{ message: AssistantMessage; interruptReason?: InferenceInterruptReason }> {
-		let messages = context.messages;
-		const contextResult = await this.port.emitHook(
-			{ type: "context", messages: [...messages] },
-			this.input.control.runSignal,
-		);
-		if (contextResult?.messages) messages = contextResult.messages;
-
 		const llmContext: Context = {
 			systemPrompt: context.systemPrompt,
-			messages: convertToLlm(messages),
+			messages: context.messages,
 			tools: context.tools,
 		};
-		const snapshotOptions = cloneStreamOptions(this.activeSnapshot.streamOptions);
-		const requestPatch = await this.port.emitHook(
-			{
-				type: "before_provider_request",
-				model,
-				sessionId: this.input.sessionId,
-				streamOptions: cloneStreamOptions(snapshotOptions),
-			},
-			this.input.control.runSignal,
-		);
-		const requestOptions = requestPatch?.streamOptions
-			? cloneStreamOptions(requestPatch.streamOptions as AgentStreamOptions)
-			: snapshotOptions;
+		const requestOptions = this.activeSnapshot.providerRequestPolicy;
 		const inference = this.input.control.openInferenceScope();
 
 		try {
 			const response = await this.models.streamSimple(model, llmContext, {
 				cacheRetention: requestOptions.cacheRetention,
-				headers: requestOptions.headers,
 				maxRetries: requestOptions.maxRetries,
 				maxRetryDelayMs: requestOptions.maxRetryDelayMs,
-				metadata: requestOptions.metadata,
-				onPayload: async (payload) => {
-					const result = await this.port.emitHook(
-						{ type: "before_provider_payload", model, payload },
-						inference.signal,
-					);
-					return result?.payload ?? payload;
-				},
 				onResponse: async (providerResponse) => {
-					await this.port.emit(
-						{
-							type: "after_provider_response",
-							status: providerResponse.status,
-							headers: { ...(providerResponse.headers as Record<string, string>) },
-						},
-						inference.signal,
-					);
+					await this.port.emit({
+						type: "after_provider_response",
+						status: providerResponse.status,
+						headers: { ...(providerResponse.headers as Record<string, string>) },
+					});
 				},
 				reasoning,
 				signal: inference.signal,
@@ -344,31 +265,29 @@ export class AgentRun<
 	}
 
 	private async handleAgentEvent(event: AgentRunEvent): Promise<void> {
-		const signal = this.input.control.runSignal;
 		if (event.type === "message_end") {
 			await this.port.commitMessage(event.message);
-			await this.port.emit(event, signal);
+			await this.port.emit(event);
 			return;
 		}
 		if (event.type === "turn_end") {
 			let eventError: unknown;
 			try {
-				await this.port.emit(event, signal);
+				await this.port.emit(event);
 			} catch (error) {
 				eventError = error;
 			}
-			const hadPendingMutations = this.port.hasPendingWrites();
-			await this.port.flushPendingWrites();
+			const hadPendingMutations = await this.port.flushPendingSessionState();
 			if (eventError) throw eventError;
-			await this.port.emit({ type: "save_point", hadPendingMutations }, signal);
+			await this.port.emit({ type: "save_point", hadPendingMutations });
 			return;
 		}
 		if (event.type === "agent_end") {
-			await this.port.flushPendingWrites();
-			await this.port.emit(event, signal);
+			await this.port.flushPendingSessionState();
+			await this.port.emit(event);
 			return;
 		}
-		await this.port.emit(event, signal);
+		await this.port.emit(event);
 	}
 
 	private async emitRunFailure(model: Model<any>, error: unknown, aborted: boolean): Promise<AgentMessage[]> {

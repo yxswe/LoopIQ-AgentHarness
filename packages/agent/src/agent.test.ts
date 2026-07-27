@@ -7,9 +7,12 @@ import {
 	fauxAssistantMessage,
 	fauxProvider,
 	InMemoryCredentialStore,
+	type Provider,
 } from "@loopiq/ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { type Agent, createAgent, createAgentForTesting } from "./agent.ts";
+import type { Agent } from "./agent.ts";
+import { DEFAULT_PROVIDER_REQUEST_POLICY } from "./base/options.ts";
+import { createAgent, createAgentForTesting } from "./create-agent.ts";
 import { ModelRuntime } from "./model/model-runtime.ts";
 
 const agents: Agent[] = [];
@@ -64,11 +67,23 @@ async function createFixture(credentials: CredentialStore = new InMemoryCredenti
 	const dataDir = await mkdtemp(join(tmpdir(), "loopiq-agent-"));
 	dataDirs.push(dataDir);
 	const faux = fauxProvider({ provider: `agent-faux-${Math.random()}` });
+	const provider: Provider = {
+		...faux.provider,
+		auth: {
+			apiKey: {
+				name: "Faux",
+				resolve: async ({ credential }) => {
+					if (credential?.type !== "api_key") throw new Error("Faux credential is missing");
+					return { auth: { apiKey: credential.key }, source: "stored credential" };
+				},
+			},
+		},
+	};
 	const model = faux.getModel();
 	await credentials.modify(model.provider, async () => ({ type: "api_key", key: "test" }));
 	const modelRuntime = new ModelRuntime({
 		credentials,
-		registrations: [{ id: model.provider, authMethods: ["api_token"], create: () => faux.provider }],
+		registrations: [{ id: model.provider, authMethods: ["api_token"], create: () => provider }],
 		validator: async (_registration, credential) => ({ state: "valid" as const, credential }),
 	});
 	const agent = await createAgentForTesting({
@@ -101,9 +116,13 @@ describe("Agent", () => {
 		]);
 		expect(await first.getConfiguration()).toEqual({
 			defaultModel: { providerId: "github-copilot", modelId: "claude-opus-4.6" },
+			defaultThinkingLevel: "high",
+			providerRequest: DEFAULT_PROVIDER_REQUEST_POLICY,
 		});
 		await first.updateConfiguration({
 			defaultModel: { providerId: "openai", modelId: "gpt-4.1-mini" },
+			defaultThinkingLevel: "medium",
+			providerRequest: { transport: "sse", timeoutMs: 120_000 },
 		});
 		await first.shutdown();
 		agents.splice(agents.indexOf(first), 1);
@@ -112,6 +131,57 @@ describe("Agent", () => {
 		agents.push(reopened);
 		expect(await reopened.getConfiguration()).toEqual({
 			defaultModel: { providerId: "openai", modelId: "gpt-4.1-mini" },
+			defaultThinkingLevel: "medium",
+			providerRequest: { ...DEFAULT_PROVIDER_REQUEST_POLICY, transport: "sse", timeoutMs: 120_000 },
+		});
+	});
+
+	it("applies the current Agent request policy to the next provider request", async () => {
+		const { agent, faux } = await createFixture();
+		const session = await agent.createSession({ cwd: process.cwd() });
+		expect(session.thinkingLevel).toBe("high");
+		const observedOptions: Array<Record<string, unknown>> = [];
+		faux.setResponses([
+			(_context, options) => {
+				observedOptions.push(options as Record<string, unknown>);
+				return fauxAssistantMessage("first");
+			},
+			(_context, options) => {
+				observedOptions.push(options as Record<string, unknown>);
+				return fauxAssistantMessage("second");
+			},
+		]);
+		expect((await (await agent.run(session.id, { text: "before update" })).result).status).toBe("completed");
+		await agent.updateConfiguration({
+			providerRequest: {
+				transport: "sse",
+				timeoutMs: 123_000,
+				maxRetries: 2,
+				maxRetryDelayMs: 4_000,
+				cacheRetention: "none",
+			},
+		});
+		expect((await (await agent.run(session.id, { text: "after update" })).result).status).toBe("completed");
+		expect(observedOptions[0]).toMatchObject(DEFAULT_PROVIDER_REQUEST_POLICY);
+		expect(observedOptions[1]).toMatchObject({
+			transport: "sse",
+			timeoutMs: 123_000,
+			maxRetries: 2,
+			maxRetryDelayMs: 4_000,
+			cacheRetention: "none",
+		});
+	});
+
+	it("rejects invalid or sensitive persisted request-policy fields", async () => {
+		const { agent } = await createFixture();
+		await expect(agent.updateConfiguration({ providerRequest: { timeoutMs: 0 } })).rejects.toMatchObject({
+			code: "invalid_argument",
+		});
+		await expect(
+			agent.updateConfiguration({ providerRequest: { headers: { Authorization: "secret" } } } as never),
+		).rejects.toMatchObject({ code: "invalid_argument" });
+		await expect(agent.updateConfiguration({ defaultThinkingLevel: "invalid" as never })).rejects.toMatchObject({
+			code: "invalid_argument",
 		});
 	});
 
@@ -148,40 +218,41 @@ describe("Agent", () => {
 		await expect(agent.abort(session.id, handle.runId)).rejects.toThrow(/stale|mismatched/i);
 	});
 
-	it("rejects credential removal while the provider has an active run", async () => {
+	it("allows credential removal while the provider has an active run", async () => {
 		const { agent, faux } = await createFixture();
 		const session = await agent.createSession({ cwd: process.cwd() });
+		const request = { started: deferred(), released: deferred() };
 		faux.setResponses([
 			async () => {
-				await new Promise((resolve) => setTimeout(resolve, 50));
+				request.started.resolve();
+				await request.released.promise;
 				return fauxAssistantMessage("done");
 			},
 		]);
 		const handle = await agent.run(session.id, { text: "hello" });
-		await expect(agent.removeProviderCredential(session.model.providerId)).rejects.toMatchObject({
-			code: "provider_busy",
-		});
-		await agent.abort(session.id, handle.runId);
+		await request.started.promise;
 		await agent.removeProviderCredential(session.model.providerId);
-		await expect(agent.run(session.id, { text: "again" })).rejects.toMatchObject({
-			code: "provider_auth_required",
-		});
+		request.released.resolve();
+
+		expect((await handle.result).status).toBe("completed");
+		expect(await agent.getProviderStatus(session.model.providerId)).toMatchObject({ credentialState: "missing" });
+
+		const failedHandle = await agent.run(session.id, { text: "again" });
+		expect((await failedHandle.result).status).toBe("failed");
 	});
 
-	it("reserves provider use during authentication preflight", async () => {
+	it("returns a run handle before request-time credential resolution completes", async () => {
 		const credentials = new ControllableCredentialStore();
 		const { agent, faux } = await createFixture(credentials);
 		const session = await agent.createSession({ cwd: process.cwd() });
 		faux.setResponses([fauxAssistantMessage("done")]);
 		const read = credentials.blockNextRead();
 
-		const pendingRun = agent.run(session.id, { text: "hello" });
+		const handle = await agent.run(session.id, { text: "hello" });
+		expect(handle.runId).toBeTruthy();
 		await read.started;
-		await expect(agent.removeProviderCredential(session.model.providerId)).rejects.toMatchObject({
-			code: "provider_busy",
-		});
 		read.release();
 
-		expect((await (await pendingRun).result).status).toBe("completed");
+		expect((await handle.result).status).toBe("completed");
 	});
 });

@@ -27,5 +27,34 @@ describe("CLI argument parsing", () => {
 			authMethod: "oauth",
 		});
 		expect(parseArgs(["config", "set-model", "openai/gpt-4.1"]).target).toBe("openai/gpt-4.1");
+		expect(parseArgs(["config", "set-thinking", "high"])).toMatchObject({
+			command: "config-set-thinking",
+			target: "high",
+		});
+		expect(
+			parseArgs([
+				"config",
+				"set-provider-request",
+				"--transport",
+				"sse",
+				"--timeout-ms",
+				"120000",
+				"--max-retries",
+				"0",
+				"--max-retry-delay-ms",
+				"60000",
+				"--cache-retention",
+				"short",
+			]),
+		).toMatchObject({
+			command: "config-set-provider-request",
+			providerRequest: {
+				transport: "sse",
+				timeoutMs: 120_000,
+				maxRetries: 0,
+				maxRetryDelayMs: 60_000,
+				cacheRetention: "short",
+			},
+		});
 	});
 });

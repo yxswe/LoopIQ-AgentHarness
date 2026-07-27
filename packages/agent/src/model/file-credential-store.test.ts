@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { NodeCredentialStore } from "./node-credential-store.ts";
+import { FileCredentialStore } from "./file-credential-store.ts";
 
 const directories: string[] = [];
 
@@ -13,10 +13,10 @@ afterEach(async () => {
 async function createStore() {
 	const dataDir = await mkdtemp(join(tmpdir(), "loopiq-credentials-"));
 	directories.push(dataDir);
-	return { dataDir, store: new NodeCredentialStore(dataDir) };
+	return { dataDir, store: new FileCredentialStore(dataDir) };
 }
 
-describe("NodeCredentialStore", () => {
+describe("FileCredentialStore", () => {
 	it("preserves the current credential when modify returns undefined", async () => {
 		const { store } = await createStore();
 		await store.modify("openai", async () => ({ type: "api_key", key: "first" }));
@@ -27,7 +27,7 @@ describe("NodeCredentialStore", () => {
 	it("persists credentials across store instances and deletes explicitly", async () => {
 		const { dataDir, store } = await createStore();
 		await store.modify("openai", async () => ({ type: "api_key", key: "secret" }));
-		const reopened = new NodeCredentialStore(dataDir);
+		const reopened = new FileCredentialStore(dataDir);
 		expect(await reopened.read("openai")).toEqual({ type: "api_key", key: "secret" });
 		await reopened.delete("openai");
 		expect(await store.read("openai")).toBeUndefined();
@@ -42,7 +42,7 @@ describe("NodeCredentialStore", () => {
 
 	it("serializes read-modify-write across store instances", async () => {
 		const { dataDir, store } = await createStore();
-		const competing = new NodeCredentialStore(dataDir);
+		const competing = new FileCredentialStore(dataDir);
 		await Promise.all([
 			store.modify("openai", async () => {
 				await new Promise((resolve) => setTimeout(resolve, 25));

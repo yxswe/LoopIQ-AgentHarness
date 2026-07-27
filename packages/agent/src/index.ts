@@ -1,23 +1,29 @@
 // Narrow adapter-facing entry point for the LoopIQ Agent application.
 
-export {
-	type Agent,
-	type AgentInput,
-	type AgentOptions,
-	createAgent,
-	type RunHandle,
-	type RunResult,
-	type SessionSnapshot,
-	type SteerOptions,
-	type UpdateSessionOptions,
+export type {
+	Agent,
+	AgentInput,
+	AgentOptions,
+	CreateSessionOptions,
+	RunHandle,
+	RunResult,
+	SessionSnapshot,
+	SessionSummary,
+	SteerOptions,
+	UpdateSessionOptions,
 } from "./agent.ts";
-export type { AgentStreamOptions, QueueMode, ThinkingLevel } from "./base/options.ts";
-export type { AbortResult } from "./base/session-types.ts";
+export type {
+	ModelReference,
+	ProviderCacheRetention,
+	ProviderRequestPolicy,
+	ProviderTransport,
+	ThinkingLevel,
+} from "./base/options.ts";
 export { AgentRuntimeError } from "./base/types.ts";
+export type { AgentConfiguration, AgentConfigurationUpdate } from "./configuration/agent-configuration.ts";
+export { createAgent } from "./create-agent.ts";
 export type {
 	AddProviderCredentialOptions,
-	AgentConfiguration,
-	AgentConfigurationUpdate,
 	ListModelsOptions,
 	ListProvidersOptions,
 	ModelSummary,
@@ -34,6 +40,5 @@ export type {
 	AgentEventListener,
 	RunSettledEvent,
 	SerializedRunError,
-} from "./runtime/event-envelope.ts";
-export type { ModelReference } from "./runtime/persisted-session-config.ts";
-export type { CreateSessionOptions, SessionSummary } from "./runtime/session-host.ts";
+} from "./session/event-envelope.ts";
+export type { AbortResult } from "./session/session-contracts.ts";

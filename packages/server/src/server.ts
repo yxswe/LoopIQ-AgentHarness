@@ -1,6 +1,14 @@
 /// <reference types="bun-types" />
 import { join, resolve } from "node:path";
-import type { Agent, AgentEventEnvelope, ModelReference, ProviderAuthMethod } from "@loopiq/agent";
+import type {
+	Agent,
+	AgentConfigurationUpdate,
+	AgentEventEnvelope,
+	ModelReference,
+	ProviderAuthMethod,
+	ProviderRequestPolicy,
+	ThinkingLevel,
+} from "@loopiq/agent";
 import { AgentRuntimeError } from "@loopiq/agent";
 import { ProviderCredentialJobs } from "./provider-credential-jobs.ts";
 import { createDefaultRuntime } from "./runtime-factory.ts";
@@ -171,10 +179,34 @@ Bun.serve({
 				return json(await agent.getConfiguration());
 			}
 			if (url.pathname === "/api/configuration" && request.method === "PATCH") {
-				const body = (await request.json().catch(() => null)) as { defaultModel?: unknown } | null;
-				const defaultModel = parseModelReference(body?.defaultModel);
-				if (!defaultModel) return json({ error: "defaultModel must use provider/model format" }, 400);
-				return json(await agent.updateConfiguration({ defaultModel }));
+				const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+				if (!body || Array.isArray(body)) return json({ error: "configuration update must be an object" }, 400);
+				const update: AgentConfigurationUpdate = {};
+				if (body.defaultModel !== undefined) {
+					const defaultModel = parseModelReference(body.defaultModel);
+					if (!defaultModel) return json({ error: "defaultModel must use provider/model format" }, 400);
+					update.defaultModel = defaultModel;
+				}
+				if (body.defaultThinkingLevel !== undefined) {
+					if (
+						typeof body.defaultThinkingLevel !== "string" ||
+						!["off", "minimal", "low", "medium", "high", "xhigh"].includes(body.defaultThinkingLevel)
+					) {
+						return json({ error: "defaultThinkingLevel is invalid" }, 400);
+					}
+					update.defaultThinkingLevel = body.defaultThinkingLevel as ThinkingLevel;
+				}
+				if (body.providerRequest !== undefined) {
+					if (
+						!body.providerRequest ||
+						typeof body.providerRequest !== "object" ||
+						Array.isArray(body.providerRequest)
+					) {
+						return json({ error: "providerRequest must be an object" }, 400);
+					}
+					update.providerRequest = body.providerRequest as Partial<ProviderRequestPolicy>;
+				}
+				return json(await agent.updateConfiguration(update));
 			}
 
 			if (url.pathname === "/api/providers" && request.method === "GET") {

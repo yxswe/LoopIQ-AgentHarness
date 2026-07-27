@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last reviewed: 2026-07-25
+Last reviewed: 2026-07-26
 
 This document defines the implemented ownership and persistence boundaries between
 the Agent, LLM providers, credentials, Sessions, the Server, and the CLI. It is
@@ -75,24 +75,24 @@ CLI adapter                    Server adapter
     +---------------+---------------+
                     |
                     v
-                  Agent
-      +-------------+------------------+
-      |                                |
-      v                                v
-  ModelRuntime                    NodeSessionHost
-  - Models                        - Session discovery
-  - built-in providers            - Session leases
-  - credential store              - Session persistence
-  - model lookup                  - AgentSession instances
-  - credential status/add/remove
+              Agent facade
+      +-----------+------------+
+      |           |            |
+      v           v            v
+ModelRuntime  AgentSettings  AgentSessionManager
+- Models      - defaults     - Session discovery
+- providers   - policy       - Session leases/storage
+- credentials - agent.json   - AgentSession instances
+- models
       |
       v
   @loopiq/ai (read-only dependency)
 ```
 
-There is one Agent per application process. That Agent owns one `ModelRuntime`
-and one `NodeSessionHost`, and it may host many Sessions. Each accepted request
-still creates one short-lived `AgentRun`.
+There is one Agent facade per application process. `createAgent()` constructs
+one `ModelRuntime`, one `AgentSettings`, and one `AgentSessionManager`, and the
+manager may host many Sessions. Each accepted request still creates one
+short-lived `AgentRun`.
 
 ## Implemented Decisions
 
@@ -102,9 +102,10 @@ An Agent is the process-level application runtime, not a conversation object.
 
 ```text
 one process
-  one Agent
+  one Agent facade
     one ModelRuntime
-    one NodeSessionHost
+    one AgentSettings
+    one AgentSessionManager
       zero or more AgentSessions
         at most one active AgentRun per Session
 ```
@@ -120,9 +121,10 @@ Consequences:
   Session-owned.
 - Creating a new Session does not create a new provider collection.
 
-### D2. Agent owns the model runtime
+### D2. ModelRuntime owns provider and model behavior
 
-`Agent` constructs and owns an internal `ModelRuntime`. `ModelRuntime` owns:
+`createAgent()` constructs an internal `ModelRuntime`; the thin facade only
+delegates model/provider commands to it. `ModelRuntime` owns:
 
 - the concrete `Models` collection from `@loopiq/ai`;
 - registration of supported built-in providers;
@@ -130,8 +132,10 @@ Consequences:
 - provider and model lookup;
 - model catalog refresh;
 - provider authentication status;
+- same-Provider explicit credential-mutation exclusion;
 - explicit credential addition, validation, replacement, and removal;
-- the streaming capability supplied to `AgentEngine`.
+- switchable-model credential policy and model resolution;
+- the model lookup and streaming capabilities supplied to `AgentEngine`.
 
 `ModelRuntime` does not own Session state, prompts, tools, message history, or
 adapter interaction policy.
@@ -195,8 +199,8 @@ createAgent({ dataDir })
   -> construct Models
   -> register built-in providers
   -> validate the locally known default model
-  -> construct AgentEngine and NodeSessionHost
-  -> return Agent
+  -> construct AgentSettings, AgentEngine, and AgentSessionManager
+  -> return thin Agent facade
 ```
 
 Construction does not:
@@ -276,8 +280,9 @@ headless and server behavior deterministic.
   without authentication.
 - An explicit login/token command or Server endpoint calls
   `addProviderCredential()`.
-- A model run without usable authentication fails with a typed authentication
-  error and does not silently start a login flow.
+- A model run without usable authentication reports the request-time Provider
+  or authentication failure through its normal Run result and does not silently
+  start a login flow.
 - CLI may print the exact login command required, but it must not prompt when a
   script expected non-interactive behavior.
 - Server starts successfully while unauthenticated and exposes authentication
@@ -354,10 +359,12 @@ Ownership is:
 | --- | --- | --- |
 | Supported provider implementations | `ModelRuntime` | Application code |
 | Global default model | Agent settings | `agent.json` |
+| Global default thinking level | Agent settings | `agent.json` |
+| Safe Provider request policy | Agent settings | `agent.json` |
 | Provider credentials | Credential store | `credentials.json` |
 | Credential validation result | `ModelRuntime` | Memory only |
 | Current Session model | `AgentSession` | `session.jsonl` |
-| Thinking level and active tools | `AgentSession` | `session.jsonl` |
+| Session thinking level | `AgentSession` | `session.jsonl` |
 | Dynamic provider/model objects | `ModelRuntime` | Memory only |
 | Login prompts and pending responses | Adapter | Memory only |
 
@@ -368,14 +375,24 @@ Ownership is:
   "defaultModel": {
     "providerId": "github-copilot",
     "modelId": "claude-opus-4.6"
+  },
+  "defaultThinkingLevel": "high",
+  "providerRequest": {
+    "transport": "auto",
+    "timeoutMs": 300000,
+    "maxRetries": 0,
+    "maxRetryDelayMs": 60000,
+    "cacheRetention": "short"
   }
 }
 ```
 
 Provider implementation objects are never serialized. Credentials are never
-written to `agent.json` or Session JSONL. Model catalog caches, if dynamic
-providers later require them, must use a separate cache file and must never be
-treated as configuration or credentials.
+written to `agent.json` or Session JSONL. Arbitrary request headers and metadata
+are also unsupported because they may contain credentials, account identifiers,
+or Provider-specific data. Model catalog caches, if dynamic providers later require
+them, must use a separate cache file and must never be treated as configuration
+or credentials.
 
 The presence of a provider ID in `credentials.json` is the durable record that
 the user supplied a credential. There is no duplicate enabled-provider list in
@@ -418,10 +435,11 @@ If a persisted Session references an unsupported provider or unknown model,
 open fails with a typed error. It must not silently move the Session to another
 model or provider.
 
-Creating a new Session from an unauthenticated default is allowed. Attempting to
-run that Session fails with `provider_auth_required` until a credential is
-added. This preserves the requirement that global configuration is independent
-from current authentication state.
+Creating a new Session from an unauthenticated default is allowed. `run()` still
+returns a handle; when the first Provider request resolves authentication it may
+use an ambient source supported by the Provider or fail through the normal
+stream result until a credential is added. This preserves the requirement that
+global configuration is independent from current authentication state.
 
 Runtime Session switching is stricter than changing the default. Provider and
 model are switched atomically through one `ModelReference`:
@@ -527,23 +545,36 @@ it never attaches an old credential's result to a concurrently replaced value.
 `removeProviderCredential()` deletes only the credential. It does not remove
 the registered provider, change the global default, or rewrite Sessions that
 reference it. After deletion, that provider disappears from switchable-provider
-results and later runs using it fail with `provider_auth_required`.
+results. Later Provider requests resolve authentication from the new durable
+state and either use a Provider-supported ambient source or fail normally.
 
-Credential replacement or removal is rejected with `provider_busy` while an
-accepted run is using that provider. The Agent reserves provider use before
-authentication preflight and releases it only when preflight fails or the run
-settles. Credential mutation takes the opposite guard for its complete
-operation, including interactive login and candidate validation, so a new run
-cannot enter preflight while replacement or removal is in progress. This
-prevents account identity or authentication from changing between successive
-provider calls. The rejected operation can be retried after the conflicting
-operation settles.
+Active Runs do not reserve credentials and credential mutation does not inspect
+active Runs. A request that already resolved authentication may finish with the
+old credential; a later request can observe a replacement or removal. This race
+is intentional: credentials are request-time capabilities, not structural Run
+configuration. `ModelRuntime` retains a same-Provider mutation guard so two
+explicit login/replacement/removal operations in one process cannot overlap;
+the rejected mutation can be retried after the other mutation settles.
 
 ### D12. Agent settings use snapshot semantics
 
-Agent settings are loaded during `createAgent()` and form that Agent instance's
-configuration snapshot. `updateConfiguration()` updates both the in-memory
-snapshot and `agent.json` through an atomic, cross-process-safe write.
+Agent settings are loaded during `createAgent()` into `AgentSettings` and form
+that process's configuration snapshot. `updateConfiguration()` delegates to
+`AgentSettings`, which updates both the in-memory snapshot and `agent.json`
+through an atomic, cross-process-safe write.
+
+The snapshot contains the default model, default thinking level, and safe
+Provider request policy. The compiled thinking default is `high`. Default model
+and thinking changes affect only new Sessions; existing Sessions retain their
+JSONL-persisted values. Request policy is process-wide and each turn snapshot
+reads its current value, so an update affects the next Provider request without
+mutating one already in flight.
+
+The request policy contains transport, a positive timeout, non-negative
+Provider retry count, non-negative server-requested retry-delay cap, and cache
+retention. Defaults are `auto`, `300000`, `0`, `60000`, and `short`. A zero
+retry-delay cap means uncapped. Headers and metadata are not Agent settings or
+runtime request options.
 
 Direct external edits or another process's setting changes are not silently
 injected into a running Agent. A later Agent instance sees them. If live reload
@@ -554,18 +585,24 @@ This differs intentionally from credentials: credentials must be read fresh
 because token rotation and login can occur in another process during normal
 operation.
 
-### D13. AgentEngine receives only the capability it needs
+### D13. AgentEngine owns shared execution assets, not provider management
 
-`AgentEngine` remains Session-stateless. It does not gain provider registration,
-credential persistence, login, or configuration responsibilities.
+`AgentEngine` remains Session-stateless. It owns the System Prompt, Skills,
+Prompt Templates, Session tool factory, model lookup/streaming capabilities,
+Provider request policy access, and Turn snapshot assembly. It does not gain
+provider registration, credential persistence, login, or catalog-refresh
+responsibilities.
 
-`ModelRuntime` supplies the narrow streaming capability used by the engine. The
-engine and `AgentRun` do not receive the credential store or mutable provider
-registry directly.
+`ModelRuntime` supplies the narrow model lookup and streaming capabilities used
+by the engine. The engine and `AgentRun` do not receive the credential store,
+login operations, or mutable provider registry directly.
 
 ```text
-Agent command/configuration layer -> ModelRuntime management operations
-AgentEngine/AgentRun             -> ModelRuntime streaming capability only
+Agent facade                     -> ModelRuntime management operations
+Agent facade                     -> AgentSettings configuration operations
+Agent facade                     -> AgentSessionManager Session operations
+AgentEngine                      -> ModelRuntime getModel/streamSimple capabilities
+AgentRun                         -> streaming capability captured by AgentEngine
 ```
 
 This preserves the existing rule that an engine may be shared across Sessions
@@ -634,9 +671,9 @@ CLI or Server
   -> Agent returns without reading or validating the credential online
 
 later: run(Session)
-  -> ModelRuntime resolves Session model
-  -> credential store reads credentials.json
-  -> valid credential is applied
+  -> Agent accepts the Run and returns its handle
+  -> first Provider request reads credentials.json
+  -> request-time auth resolves or refreshes the credential
   -> provider request starts
 ```
 
@@ -707,7 +744,7 @@ agent.addProviderCredential(providerId, method, interaction)
 
 ```text
 agent.removeProviderCredential(providerId)
-  -> reject with provider_busy if an active run uses the provider
+  -> serialize against another explicit mutation of the same provider
   -> atomically delete the credentials.json entry
   -> invalidate cached provider status
   -> keep provider registration, global default, and Session model references
@@ -746,37 +783,38 @@ createSession({ cwd })
   -> uses the new default pair
 
 run(newSession)
-  -> fails with provider_auth_required until a credential is added
+  -> returns a RunHandle
+  -> actual Provider request uses ambient auth or fails until a credential is added
 ```
 
 ### Missing authentication during a run
 
 ```text
 agent.run(sessionId, input)
-  -> Session model resolves
-  -> reserve provider use without creating a run ID
-  -> ModelRuntime cannot resolve usable auth
-  -> command fails with provider_auth_required
-  -> release provider use
+  -> open Session
+  -> reserve run ID and return RunHandle
+  -> AgentRun starts the Provider request
+  -> @loopiq/ai reads the current credential
+  -> Provider auth setup or request reports the missing-auth failure
+  -> Run settles as failed
   -> no interactive login starts
 ```
 
-Authentication preflight occurs before reserving a run. An authentication
-failure therefore cannot produce a run ID for work that never reached the
-provider loop. The internal provider-use guard is not a run reservation; it
-only excludes credential mutation during the asynchronous preflight window.
+There is no authentication preflight. Missing authentication is ordinary Run
+execution failure, so adapters receive the same handle, events, persisted error
+message, and settlement lifecycle as other Provider failures.
 
 ### Expired OAuth access token
 
 ```text
-run preflight
+first Provider request
   -> stored token is expired
   -> credential store acquires provider write lock
   -> re-reads current credential
   -> refreshes only if still expired
   -> atomically saves replacement credential
   -> releases lock
-  -> run is accepted
+  -> Provider request continues
 ```
 
 ### Resume after global default changes
@@ -817,11 +855,10 @@ The Agent exposes stable application errors rather than raw
 | --- | --- |
 | `provider_not_found` | Provider is not supported by this Agent application |
 | `model_not_found` | Model is not present in the provider catalog |
-| `provider_auth_required` | No persisted credential exists for the selected provider |
-| `provider_auth_failed` | Stored authentication or token refresh failed |
+| `provider_auth_required` | An explicit management operation requires a persisted valid credential |
 | `provider_credential_invalid` | Online validation proved that the credential is rejected |
 | `provider_validation_unavailable` | Credential validity could not be established because validation was unavailable |
-| `provider_busy` | Credential mutation was rejected while an active run uses the provider |
+| `provider_busy` | Another explicit credential mutation is already active for the Provider |
 | `provider_credential_canceled` | Credential entry or OAuth was canceled |
 | `provider_credential_setup_failed` | Credential entry, OAuth, or validation failed |
 | `credential_store` | Credential persistence or locking failed |
@@ -837,32 +874,40 @@ The implementation uses this ownership:
 ```text
 packages/agent/src/
   agent.ts
+  create-agent.ts
+  configuration/
+    agent-configuration.ts
+    agent-settings.ts
+    file-agent-settings-store.ts
   model/
     model-runtime.ts
     provider-types.ts
     builtin-providers.ts
-  node/
-    node-agent-settings-store.ts
-    node-credential-store.ts
-    node-file-lock.ts
-    node-session-host.ts
+    file-credential-store.ts
+  session/
+    agent-session-manager.ts
+  persistence/
+    file-lock.ts
+    json-file.ts
 ```
 
-Provider-independent application types belong under `model/`. Node filesystem
-mechanics belong under `node/`. No file is added or changed under
-`packages/ai`.
+Provider and credential behavior belongs under `model/`; Agent-wide settings
+belong under `configuration/`; Session behavior belongs under `session/`.
+Shared persistence files are dependency-leaf primitives and import no business
+types. Platform usage does not justify a top-level technical bucket. No file is
+added or changed under `packages/ai`.
 
 ## Implementation Record
 
 1. Add Agent-owned serializable model/provider/auth types and errors.
-2. Add a single Node credential store with correct `modify()`, locking, atomic
+2. Add a single file credential store with correct `modify()`, locking, atomic
    writes, permissions, and tests.
 3. Add the Agent settings store and the single current `agent.json` shape.
 4. Add `ModelRuntime` with the agreed eleven-provider registration list, model
    lookup, credential validation strategies, credential mutation, status, and
    stream capability.
 5. Make `createAgent()` asynchronous and internalize concrete construction.
-6. Route `NodeSessionHost` and `AgentEngine` model access through
+6. Route `AgentSessionManager` and `AgentEngine` model access through
    `ModelRuntime` capabilities.
 7. Add Agent configuration, provider/model listing, credential
    add/validate/remove, and atomic Session model-switch operations.
@@ -905,11 +950,11 @@ Future changes to this behavior must update
 - credential removal deletes only the selected provider credential;
 - removing a credential leaves provider registration, Agent default, and
   Session references unchanged;
-- credential mutation is rejected while an active run uses the provider;
-- credential mutation and run authentication preflight cannot interleave;
-- missing auth returns `provider_auth_required`;
+- credential mutation may proceed while an active Run uses the Provider;
+- an actual Provider request, not `Agent.run()`, resolves current authentication;
+- missing auth settles the accepted Run through its normal failure path;
 - expired access token refreshes and persists once;
-- refresh failure returns `provider_auth_failed` without deleting the stored
+- refresh failure settles the Run as failed without deleting the stored
   credential;
 - credential values never appear in events or serialized errors.
 
@@ -948,17 +993,18 @@ Future changes to this behavior must update
 All recorded decisions below are implemented:
 
 - [x] D1 — One Agent per process and many Sessions per Agent.
-- [x] D2 — Agent owns one internal `ModelRuntime` and registers the agreed eleven providers.
+- [x] D2 — `ModelRuntime` owns provider/model behavior and registers the agreed eleven providers.
 - [x] D3 — Public Agent construction accepts only `dataDir` and becomes async.
 - [x] D4 — Agent construction performs no login or provider network access.
-- [x] D5 — Agent owns credential operations; adapters provide interaction callbacks.
+- [x] D5 — `ModelRuntime` owns credential operations; the Agent facade exposes them and adapters provide interaction callbacks.
 - [x] D6 — Login is always explicit; a normal run never opens an interactive flow.
 - [x] D7 — Token refresh is automatic and durable; re-login remains explicit.
 - [x] D8 — Settings, credentials, Session state, and validation cache remain separate.
 - [x] D9 — Defaults may be unauthenticated; Session switching requires a valid credential.
 - [x] D10 — Provider status, validation, model listing, and switching are Agent operations.
 - [x] D11 — One process-safe credential store supports runtime add, replace, and removal.
-- [x] D12 — Agent settings use per-instance snapshot semantics.
-- [x] D13 — Engine receives streaming capability, not auth or provider management.
+- [x] D12 — `AgentSettings` uses per-process snapshot semantics.
+- [x] D13 — Engine owns shared execution assets and narrow model capabilities,
+  not authentication or provider management.
 - [x] D14 — CLI and Server become adapters with no direct `@loopiq/ai` dependency.
 - [x] D15 — Replaced implementations are deleted without forwarding wrappers.

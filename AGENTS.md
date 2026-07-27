@@ -22,6 +22,20 @@
   read-only. NEVER modify code or other files inside `packages/ai`; implement
   integrations or adaptations in consuming packages instead.
 
+# Folder Ownership
+
+- Organize source folders strictly by business capability and ownership, not by
+  generic technical labels. A file belongs with the subsystem that owns its
+  behavior, even when its implementation uses Node, persistence, or runtime
+  APIs.
+- Do not create top-level catch-all folders such as `runtime`, `node`,
+  `services`, `common`, or `utils`. Platform-specific implementations must live
+  inside their owning business subsystem. A shared low-level folder is allowed
+  only for dependency-leaf primitives that import no business types.
+- Before adding or moving a file, identify its single owning subsystem. If that
+  ownership is unclear, fix the boundary instead of placing the file in a
+  miscellaneous folder.
+
 # Language Rules
 
 - All conversational responses to the user MUST be written in Chinese.

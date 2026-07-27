@@ -7,8 +7,8 @@ import {
 	type Models,
 	type MutableModels,
 } from "@loopiq/ai";
+import type { ModelReference } from "../base/options.ts";
 import { AgentRuntimeError, toError } from "../base/types.ts";
-import type { ModelReference } from "../runtime/persisted-session-config.ts";
 import type { BuiltinProviderRegistration } from "./builtin-providers.ts";
 import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtin-providers.ts";
 import type {
@@ -45,9 +45,22 @@ export type CredentialValidator = (
 ) => Promise<ValidationResult>;
 
 export class ModelRuntime {
+	/**
+	 * Narrow capability view shared with the Session host and Agent engine. `Models`
+	 * supports provider/model lookup, catalog refresh, auth resolution, and model
+	 * execution, but it does not expose provider-registry mutation methods.
+	 */
 	readonly models: Models;
+	/**
+	 * The same collection instance as `models`, retained under its wider internal
+	 * type. `MutableModels` extends `Models` with `setProvider()`, `deleteProvider()`,
+	 * and `clearProviders()` so only ModelRuntime can change the provider registry.
+	 * Assigning `this.models = this.mutableModels` creates no copy or wrapper; the
+	 * two fields are different type views of one object.
+	 */
 	private readonly mutableModels: MutableModels;
 	private readonly credentials: CredentialStore;
+	private readonly credentialMutations = new Set<string>();
 	private readonly registrations: Map<string, BuiltinProviderRegistration>;
 	private readonly validationCache = new Map<string, CachedValidation>();
 	private readonly validateCredential: CredentialValidator;
@@ -79,6 +92,12 @@ export class ModelRuntime {
 			throw new AgentRuntimeError("model_not_found", `Unknown model ${reference.providerId}/${reference.modelId}`);
 		}
 		return model;
+	}
+
+	async resolveSwitchableModel(reference: ModelReference): Promise<Model<any>> {
+		const status = await this.validateProviderCredential(reference.providerId);
+		this.requireValidProvider(status);
+		return this.resolveModel(reference);
 	}
 
 	async listModels(providerId?: string, options?: ListModelsOptions): Promise<ModelSummary[]> {
@@ -118,6 +137,13 @@ export class ModelRuntime {
 	}
 
 	async addProviderCredential(providerId: string, options: AddProviderCredentialOptions): Promise<ProviderStatus> {
+		return this.withCredentialMutation(providerId, () => this.addProviderCredentialUnlocked(providerId, options));
+	}
+
+	private async addProviderCredentialUnlocked(
+		providerId: string,
+		options: AddProviderCredentialOptions,
+	): Promise<ProviderStatus> {
 		const registration = this.requireRegistration(providerId);
 		if (!registration.authMethods.includes(options.method)) {
 			throw new AgentRuntimeError(
@@ -195,36 +221,46 @@ export class ModelRuntime {
 	}
 
 	async removeProviderCredential(providerId: string): Promise<void> {
-		this.requireRegistration(providerId);
-		await this.credentials.delete(providerId);
-		this.validationCache.delete(providerId);
+		await this.withCredentialMutation(providerId, async () => {
+			this.requireRegistration(providerId);
+			await this.credentials.delete(providerId);
+			this.validationCache.delete(providerId);
+		});
 	}
 
-	async requireUsableCredential(reference: ModelReference): Promise<void> {
-		const model = await this.resolveModel(reference, false);
-		const stored = await this.credentials.read(reference.providerId);
-		if (!stored) {
+	private async withCredentialMutation<T>(providerId: string, operation: () => Promise<T>): Promise<T> {
+		if (this.credentialMutations.has(providerId)) {
+			throw new AgentRuntimeError(
+				"provider_busy",
+				`Provider ${providerId} already has a credential mutation in progress`,
+			);
+		}
+		this.credentialMutations.add(providerId);
+		try {
+			return await operation();
+		} finally {
+			this.credentialMutations.delete(providerId);
+		}
+	}
+
+	private requireValidProvider(status: ProviderStatus): void {
+		if (status.credentialState === "valid") return;
+		if (status.credentialState === "missing" || status.credentialState === "unchecked") {
 			throw new AgentRuntimeError(
 				"provider_auth_required",
-				`Provider ${reference.providerId} requires a credential`,
+				`Provider ${status.providerId} requires a valid credential`,
 			);
 		}
-		try {
-			const auth = await this.mutableModels.getAuth(model);
-			if (!auth) {
-				throw new AgentRuntimeError(
-					"provider_auth_required",
-					`Provider ${reference.providerId} requires a credential`,
-				);
-			}
-		} catch (error) {
-			if (error instanceof AgentRuntimeError) throw error;
+		if (status.credentialState === "invalid") {
 			throw new AgentRuntimeError(
-				"provider_auth_failed",
-				`Authentication failed for provider ${reference.providerId}`,
-				toError(error),
+				"provider_credential_invalid",
+				status.message ?? `Provider ${status.providerId} rejected its credential`,
 			);
 		}
+		throw new AgentRuntimeError(
+			"provider_validation_unavailable",
+			status.message ?? `Could not validate provider ${status.providerId}`,
+		);
 	}
 
 	private requireRegistration(providerId: string): BuiltinProviderRegistration {

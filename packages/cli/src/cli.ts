@@ -11,6 +11,7 @@ import {
 	createAgent,
 	type ModelReference,
 	type ProviderLoginInteraction,
+	type ProviderRequestPolicy,
 	type RunResult,
 	type SessionSnapshot,
 	type ThinkingLevel,
@@ -28,7 +29,9 @@ type Command =
 	| "providers-remove"
 	| "models-list"
 	| "config-get"
-	| "config-set-model";
+	| "config-set-model"
+	| "config-set-thinking"
+	| "config-set-provider-request";
 
 interface ParsedOptions {
 	command: Command;
@@ -43,6 +46,7 @@ interface ParsedOptions {
 	dataDir: string;
 	target?: string;
 	authMethod?: "api_token" | "oauth";
+	providerRequest?: Partial<ProviderRequestPolicy>;
 }
 
 function takeValue(args: string[], index: number, name: string): string {
@@ -56,6 +60,12 @@ function takeTarget(args: string[], message: string): string {
 	const target = args.shift();
 	if (!target || target.startsWith("--")) throw new Error(message);
 	return target;
+}
+
+function takeInteger(args: string[], index: number, name: string): number {
+	const value = Number(takeValue(args, index, name));
+	if (!Number.isInteger(value)) throw new Error(`${name} requires an integer`);
+	return value;
 }
 
 export function parseArgs(argv: string[]): ParsedOptions {
@@ -99,7 +109,11 @@ export function parseArgs(argv: string[]): ParsedOptions {
 		else if (action === "set-model") {
 			command = "config-set-model";
 			target = takeTarget(args, "config set-model requires provider/model");
-		} else throw new Error("config requires get or set-model");
+		} else if (action === "set-thinking") {
+			command = "config-set-thinking";
+			target = takeTarget(args, "config set-thinking requires a thinking level");
+		} else if (action === "set-provider-request") command = "config-set-provider-request";
+		else throw new Error("config requires get, set-model, set-thinking, or set-provider-request");
 	}
 
 	const options: ParsedOptions = {
@@ -125,6 +139,25 @@ export function parseArgs(argv: string[]): ParsedOptions {
 		else if (argument === "--data-dir") options.dataDir = resolve(takeValue(args, index, argument));
 		else if (argument === "--auth-method") {
 			options.authMethod = takeValue(args, index, argument) as "api_token" | "oauth";
+		} else if (argument === "--transport") {
+			options.providerRequest ??= {};
+			options.providerRequest.transport = takeValue(args, index, argument) as ProviderRequestPolicy["transport"];
+		} else if (argument === "--timeout-ms") {
+			options.providerRequest ??= {};
+			options.providerRequest.timeoutMs = takeInteger(args, index, argument);
+		} else if (argument === "--max-retries") {
+			options.providerRequest ??= {};
+			options.providerRequest.maxRetries = takeInteger(args, index, argument);
+		} else if (argument === "--max-retry-delay-ms") {
+			options.providerRequest ??= {};
+			options.providerRequest.maxRetryDelayMs = takeInteger(args, index, argument);
+		} else if (argument === "--cache-retention") {
+			options.providerRequest ??= {};
+			options.providerRequest.cacheRetention = takeValue(
+				args,
+				index,
+				argument,
+			) as ProviderRequestPolicy["cacheRetention"];
 		} else if (argument === "--stdin") {
 			options.stdin = true;
 			args.splice(index, 1);
@@ -134,6 +167,9 @@ export function parseArgs(argv: string[]): ParsedOptions {
 	if (!(["text", "json", "jsonl"] as string[]).includes(options.format)) throw new Error("Invalid output format");
 	if (options.authMethod && options.authMethod !== "api_token" && options.authMethod !== "oauth") {
 		throw new Error("--auth-method must be api_token or oauth");
+	}
+	if (command === "config-set-provider-request" && !options.providerRequest) {
+		throw new Error("config set-provider-request requires at least one request option");
 	}
 	if (options.sessionId && options.newSession) throw new Error("--session and --new are mutually exclusive");
 	if (options.stdin && args.length > 0) throw new Error("prompt argument and --stdin are mutually exclusive");
@@ -367,6 +403,10 @@ async function runManagementCommand(options: ParsedOptions): Promise<number> {
 		else if (options.command === "config-get") value = await agent.getConfiguration();
 		else if (options.command === "config-set-model") {
 			value = await agent.updateConfiguration({ defaultModel: parseModelReference(options.target!) });
+		} else if (options.command === "config-set-thinking") {
+			value = await agent.updateConfiguration({ defaultThinkingLevel: options.target as ThinkingLevel });
+		} else if (options.command === "config-set-provider-request") {
+			value = await agent.updateConfiguration({ providerRequest: options.providerRequest });
 		} else throw new Error(`Unsupported management command ${options.command}`);
 
 		if (options.format === "text") {

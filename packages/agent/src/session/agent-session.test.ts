@@ -1,13 +1,14 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxAssistantMessage, fauxProvider } from "@loopiq/ai";
-import { afterEach, describe, expect, it } from "vitest";
-import { createAgentEngine } from "../engine/agent-engine.ts";
+import { createModels, fauxAssistantMessage, fauxProvider, Type } from "@loopiq/ai";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_PROVIDER_REQUEST_POLICY } from "../base/options.ts";
+import type { AgentTool } from "../base/resource.ts";
+import { AgentEngine } from "../engine/agent-engine.ts";
 import { NodeExecutionEnv } from "../env/nodejs.ts";
-import { JsonlSessionStorage } from "../session/jsonl-storage.ts";
-import { toSession } from "../session/storage-utils.ts";
 import { AgentSession } from "./agent-session.ts";
+import { JsonlSessionStore } from "./storage/jsonl-session-store.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -17,28 +18,43 @@ afterEach(async () => {
 	);
 });
 
-async function createRuntime(name: string, dependencies: ReturnType<typeof createDependencies>): Promise<AgentSession> {
+async function createRuntimeWithStore(name: string, dependencies: ReturnType<typeof createDependencies>) {
 	const directory = await mkdtemp(join(tmpdir(), `loopiq-${name}-`));
 	temporaryDirectories.push(directory);
 	const env = new NodeExecutionEnv({ cwd: directory });
-	const storage = await JsonlSessionStorage.create(env, join(directory, "session.jsonl"), {
+	const store = await JsonlSessionStore.create(env, join(directory, "session.jsonl"), {
 		cwd: directory,
 		sessionId: name,
 	});
-	return AgentSession.create({
+	const session = await AgentSession.load({
 		env,
-		session: toSession(storage),
+		store,
 		engine: dependencies.engine,
-		model: dependencies.model,
-		systemPrompt: `system-${name}`,
+		defaults: {
+			model: { providerId: dependencies.model.provider, modelId: dependencies.model.id },
+			thinkingLevel: "high",
+		},
 	});
+	return { session, store };
+}
+
+async function createRuntime(name: string, dependencies: ReturnType<typeof createDependencies>): Promise<AgentSession> {
+	return (await createRuntimeWithStore(name, dependencies)).session;
 }
 
 function createDependencies(options?: { tokensPerSecond?: number }) {
 	const faux = fauxProvider({ provider: `faux-${Math.random()}`, tokensPerSecond: options?.tokensPerSecond });
 	const models = createModels();
 	models.setProvider(faux.provider);
-	return { faux, model: faux.getModel(), engine: createAgentEngine({ models }) };
+	return {
+		faux,
+		model: faux.getModel(),
+		engine: new AgentEngine({
+			models,
+			getProviderRequestPolicy: () => DEFAULT_PROVIDER_REQUEST_POLICY,
+			systemPrompt: ({ sessionId }) => `system-${sessionId}`,
+		}),
+	};
 }
 
 function assistantText(message: { content: Array<{ type: string; text?: string }> } | undefined): string {
@@ -46,6 +62,93 @@ function assistantText(message: { content: Array<{ type: string; text?: string }
 }
 
 describe("AgentSession", () => {
+	it("uses Engine-owned tools, resources, and System Prompt assembly for every Session", async () => {
+		const faux = fauxProvider({ provider: `faux-${Math.random()}` });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const createdTools: AgentTool[] = [];
+		const engine = new AgentEngine({
+			models,
+			getProviderRequestPolicy: () => DEFAULT_PROVIDER_REQUEST_POLICY,
+			createTools: () => {
+				const tool: AgentTool = {
+					name: "Inspect",
+					label: "Inspect",
+					description: "Inspect Engine ownership in tests.",
+					parameters: Type.Object({}),
+					async execute() {
+						return { content: [{ type: "text", text: "ok" }], details: {} };
+					},
+				};
+				createdTools.push(tool);
+				return [tool];
+			},
+			resources: {
+				skills: [{ name: "review", description: "Review code", content: "Review.", filePath: "/skills/review" }],
+				promptTemplates: [{ name: "explain", content: "Explain this code." }],
+			},
+			systemPrompt: ({ tools, resources }) =>
+				JSON.stringify({
+					tools: tools.map((tool) => tool.name),
+					skills: resources.skills?.map((skill) => skill.name),
+					promptTemplates: resources.promptTemplates?.map((template) => template.name),
+				}),
+		});
+		const dependencies = { faux, model: faux.getModel(), engine };
+		faux.setResponses([
+			(context) => fauxAssistantMessage(context.systemPrompt ?? ""),
+			(context) => fauxAssistantMessage(context.systemPrompt ?? ""),
+		]);
+		const sessionA = await createRuntime("engine-assets-a", dependencies);
+		const sessionB = await createRuntime("engine-assets-b", dependencies);
+
+		const [resultA, resultB] = await Promise.all([
+			sessionA.startRun({ text: "alpha" }).result,
+			sessionB.startRun({ text: "beta" }).result,
+		]);
+
+		expect(createdTools).toHaveLength(2);
+		expect(createdTools[0]).not.toBe(createdTools[1]);
+		for (const result of [resultA, resultB]) {
+			const text = assistantText(result.finalMessage);
+			expect(text).toContain('"tools":["Inspect"]');
+			expect(text).toContain('"skills":["review"]');
+			expect(text).toContain('"promptTemplates":["explain"]');
+		}
+	});
+
+	it("restores context once and maintains later turns incrementally in memory", async () => {
+		const dependencies = createDependencies();
+		dependencies.faux.setResponses([
+			fauxAssistantMessage("first-answer"),
+			(context) => fauxAssistantMessage(JSON.stringify(context.messages)),
+		]);
+		const directory = await mkdtemp(join(tmpdir(), "loopiq-incremental-context-"));
+		temporaryDirectories.push(directory);
+		const env = new NodeExecutionEnv({ cwd: directory });
+		const store = await JsonlSessionStore.create(env, join(directory, "session.jsonl"), {
+			cwd: directory,
+			sessionId: "incremental-context",
+		});
+		const restore = vi.spyOn(store, "restore");
+		const session = await AgentSession.load({
+			env,
+			store,
+			engine: dependencies.engine,
+			defaults: {
+				model: { providerId: dependencies.model.provider, modelId: dependencies.model.id },
+				thinkingLevel: "high",
+			},
+		});
+
+		await session.startRun({ text: "first-question" }).result;
+		const second = await session.startRun({ text: "second-question" }).result;
+
+		expect(restore).toHaveBeenCalledTimes(1);
+		expect(assistantText(second.finalMessage)).toContain("first-answer");
+		expect(assistantText(second.finalMessage)).toContain("second-question");
+	});
+
 	it("runs two Sessions concurrently through one stateless engine without context bleed", async () => {
 		const dependencies = createDependencies();
 		const respond = (context: { systemPrompt?: string; messages: Array<{ role: string; content?: unknown }> }) =>

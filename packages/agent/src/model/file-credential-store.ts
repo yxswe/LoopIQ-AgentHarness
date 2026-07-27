@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import type { Credential, CredentialStore } from "@loopiq/ai";
 import { AgentRuntimeError, toError } from "../base/types.ts";
-import { withNodeFileLock } from "./node-file-lock.ts";
-import { readJsonFile, writeJsonFileAtomic } from "./node-json-file.ts";
+import { withFileLock } from "../persistence/file-lock.ts";
+import { readJsonFile, writeJsonFileAtomic } from "../persistence/json-file.ts";
 
 type CredentialMap = Record<string, Credential>;
 
@@ -16,7 +16,7 @@ function isCredentialMap(value: unknown): value is CredentialMap {
 	);
 }
 
-export class NodeCredentialStore implements CredentialStore {
+export class FileCredentialStore implements CredentialStore {
 	private readonly filePath: string;
 	private readonly lockPath: string;
 
@@ -33,7 +33,7 @@ export class NodeCredentialStore implements CredentialStore {
 		providerId: string,
 		fn: (current: Credential | undefined) => Promise<Credential | undefined>,
 	): Promise<Credential | undefined> {
-		return withNodeFileLock(this.lockPath, async () => {
+		return withFileLock(this.lockPath, async () => {
 			const credentials = await this.load();
 			const current = credentials[providerId];
 			const next = await fn(current);
@@ -45,7 +45,7 @@ export class NodeCredentialStore implements CredentialStore {
 	}
 
 	async delete(providerId: string): Promise<void> {
-		await withNodeFileLock(this.lockPath, async () => {
+		await withFileLock(this.lockPath, async () => {
 			const credentials = await this.load();
 			if (!(providerId in credentials)) return;
 			delete credentials[providerId];
