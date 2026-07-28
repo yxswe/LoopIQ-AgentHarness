@@ -1,28 +1,34 @@
 # Session Design
 
-This document describes the current Session persistence model in
-`@loopiq/agent-core`. It is the detailed companion to the Session overview in
+This document describes Session persistence and loaded runtime context inside
+the Agent. It is the detailed companion to the Session overview in
 [`architect.md`](./architect.md).
 
 ## Current Status
 
 Sessions are intentionally linear. A Session is an append-only sequence of
 entries stored in one JSONL file. Physical entry order is the only history
-order; there is no active leaf, parent pointer, in-file branch, or tree
-navigation state.
+order; there is no in-file branching or tree navigation state.
 
-The current format version is `4`. Version 4 establishes the linear model and
-is deliberately incompatible with the legacy version 3 tree format.
+The durable log and the loaded runtime context are separate concerns:
+
+- `JsonlSessionStore` validates and appends the durable log;
+- `AgentSession` restores model-visible messages once, then maintains the
+  current message context incrementally in memory;
+- `AgentEngine` assembles Prompt, Tools, Skills, Prompt Templates, model
+  selection, and request policy into each Turn snapshot;
+- `AgentRun` combines its incrementally maintained message context with the
+  current Turn snapshot for each Provider request.
 
 ## Goals
 
-- Persist each completed message and supported extension entry in append order.
-- Reopen a Session and reconstruct the same ordered history.
-- Build model context deterministically from that ordered history.
-- Support context compaction without introducing branches.
+- Persist each completed message and Session configuration in append order.
+- Reopen a Session and reconstruct the same ordered model-visible history.
+- Avoid scanning the complete durable log at every Turn boundary.
+- Make a committed message visible in memory only after its append succeeds.
 - Reject malformed or incompatible files instead of guessing their meaning.
-- Keep the Session subsystem internal to `AgentHarness` until a narrower public
-  Session API is required.
+- Expose lifecycle through identity-based `Agent` methods without exporting
+  concrete runtimes or persistence implementations.
 
 ## Non-Goals
 
@@ -30,14 +36,12 @@ The current implementation does not support:
 
 - moving an active cursor to an earlier entry;
 - multiple branches inside one Session file;
-- persisted leaf or HEAD records;
 - entry labels or Session display names;
-- branch-scoped model, thinking-level, or active-tool configuration;
+- branch-scoped model or thinking-level configuration;
 - cloning or forking history through a Session repository API;
-- automatic migration of legacy version 3 tree Sessions.
+- context compaction or summary entries.
 
-These capabilities should not be partially restored inside version 4. If a
-future product requirement needs branching, it must start with an explicit
+If a future product requirement needs branching, it must start with an explicit
 format and API design rather than reusing the linear ordering rules implicitly.
 
 ## JSONL Format
@@ -47,127 +51,143 @@ The first non-empty line is the Session header:
 ```json
 {
   "type": "session",
-  "version": 4,
   "id": "session-id",
   "timestamp": "2026-07-18T00:00:00.000Z",
-  "cwd": "/workspace/project"
+  "workspaceDir": "/workspace/project"
 }
 ```
 
-Every following non-empty line is one `SessionEntry`. Entries contain a unique
-`id`, an ISO timestamp, and one of four supported types:
+Every following non-empty line is one entry. Entries contain a unique `id`, an
+ISO timestamp, and one of two supported types:
 
 ```ts
-type SessionEntry =
-  | MessageEntry
-  | CompactionEntry
-  | CustomEntry
-  | CustomMessageEntry;
+type SessionEntry = MessageEntry | SessionConfigurationEntry;
 ```
 
 ### `message`
 
-Stores an `AgentMessage` emitted during a run. User, assistant, tool-result, and
-supported custom Agent messages are persisted through this entry type.
+Stores an `AgentMessage` committed during a run. User, assistant, and
+tool-result messages use this entry type.
 
-### `compaction`
+### `session_config`
 
-Stores a generated context summary plus `firstKeptEntryId` and
-`tokensBefore`. Compaction does not delete or reorder previous JSONL lines. It
-changes how `buildSessionContext()` interprets the linear history.
+Stores a complete `{ model, thinkingLevel }` replacement snapshot. The latest
+valid entry is restored on open. It remains non-model-visible and does not alter
+linear ordering.
 
-### `custom`
+```json
+{
+  "type": "session_config",
+  "id": "019c...",
+  "timestamp": "2026-07-18T00:00:00.000Z",
+  "configuration": {
+    "model": {
+      "providerId": "github-copilot",
+      "modelId": "claude-opus-4.6"
+    },
+    "thinkingLevel": "high"
+  }
+}
+```
 
-Stores extension data that is not inserted into model context.
+## Persistence Invariants
 
-### `custom_message`
+`JsonlSessionStore` enforces these invariants:
 
-Stores extension content that is converted into a custom Agent message when
-context is rebuilt. The `display` flag remains presentation metadata.
-
-## Linear Invariants
-
-The storage implementation enforces the following invariants when opening or
-appending:
-
-1. The header version must be exactly `4`.
-2. Only the four documented entry types are accepted.
+1. The header requires one non-empty absolute `workspaceDir`.
+2. Only `message` and `session_config` entries are accepted.
 3. Every entry has a non-empty unique ID and timestamp.
 4. Required type-specific fields are validated before an entry is accepted.
-5. A compaction entry's `firstKeptEntryId` references an earlier entry in the
-   same file.
-6. Entry order is the physical JSONL order.
-7. Entries do not contain `parentId`, `leaf`, or other tree-navigation fields.
-8. `getEntries()` returns a new array so callers cannot reorder storage state in
-   memory.
+5. Physical JSONL order is authoritative.
+6. `restore()` returns a new message array and a cloned configuration value.
+7. Appends are serialized inside one Store instance.
+8. A line is written successfully before the in-memory entry index is updated.
 
-An append writes the JSONL line before updating the in-memory entry list. A
-failed write therefore does not expose an entry that was not persisted.
+The per-Session `runtime.lock` prevents two processes from opening the same log
+for writes. It does not coordinate different Sessions that share a working
+directory.
 
-## Open-or-Create Behavior
+## Loading and Hosting
 
-`AgentHarness.create({ cwd, sessionPath, ... })` owns Session construction:
+All adapter access goes through the thin `Agent` facade. Its internal
+`AgentSessionManager` owns this layout:
 
-1. Build a `NodeExecutionEnv` from `cwd`.
-2. Check whether `sessionPath` exists.
-3. Open and validate an existing file, or create a new version 4 file when the
-   path is absent.
-4. Wrap the storage in `Session` and pass it to the private harness constructor.
+```text
+~/.loopiq/sessions/<sessionId>/
+  session.jsonl
+  runtime.lock
+```
 
-Only an actual missing path triggers creation. Permission, file-type, and other
-filesystem failures are propagated and must never cause an existing file to be
-overwritten.
+The manager reads and validates the header before constructing the resumed
+`NodeExecutionEnv`; persisted `workspaceDir` is authoritative and must be an
+absolute path. Session creation normalizes a supplied relative or absolute path
+to an absolute path before writing the header. Creation and resume both require
+the path to exist and identify a directory. Loaded Sessions are single-flighted
+in-process. The writer lease is released on close, failed open, delete, or
+shutdown. A close rejected because the Session is busy retains both the loaded
+instance and its writer lease.
 
-## Context Reconstruction
+`AgentSession.load()` then performs one load-time assembly:
 
-Without compaction, `buildSessionContext()` scans entries from first to last:
+1. restore model-visible messages and the latest Session configuration from the
+   validated Store state;
+2. ask `AgentEngine` to create and validate tools bound to the Session environment;
+3. ask `AgentEngine` to resolve the selected model;
+4. retain the resulting configuration, tool instances, and messages in memory.
 
-- `message` entries contribute their stored message;
-- `custom_message` entries contribute a generated custom message;
-- `custom` entries do not contribute model-visible messages.
+## Runtime Context
 
-When compaction entries exist, the latest compaction entry is authoritative.
-The rebuilt context contains:
+After loading, JSONL is not rescanned for each Turn. `AgentSession.messages` is
+the authoritative model-visible context for that loaded runtime.
 
-1. the compaction summary message;
-2. retained entries beginning at `firstKeptEntryId` and preceding the
-   compaction entry;
-3. model-visible entries appended after the compaction entry.
+A complete message commit has this order:
 
-This is still a linear interpretation. `firstKeptEntryId` is a boundary marker,
-not a parent or branch pointer.
+```text
+AgentRun
+  -> AgentRunPort.commitMessage(message)
+  -> JsonlSessionStore.appendMessage(message)
+  -> AgentSession.messages.push(message)
+  -> emit message_end
+```
+
+If persistence fails, the message is not added to runtime context and
+`message_end` is not emitted. When a Run starts, `AgentSession` copies its
+current message array once into `AgentRunInput`. `AgentRun` adds every prompt,
+assistant message, steering message, and tool result to its own context as the
+same committed messages are added to `AgentSession.messages`. Later Turn
+refreshes update Engine-owned execution assets without replacing or copying the
+Run's complete message array.
+
+Closing and reopening a Session discards the loaded array and reconstructs it
+once from the durable log, which also verifies that incremental memory state
+and persistence converge.
+
+## Initial Context Restoration
+
+Restoration scans validated entries once in physical order. `message` entries
+contribute their stored messages; `session_config` entries replace the restored
+configuration and never enter model context.
 
 ## Internal Modules
 
-- `src/base/session-types.ts` defines the four entry types, metadata,
-  `SessionStorage`, and pending writes.
-- `src/session/jsonl-storage.ts` validates, creates, opens, and appends version 4
-  JSONL files.
-- `src/session/session.ts` provides ordered append helpers and context rebuilding.
-- `src/session/session-writer.ts` serially flushes buffered writes.
-- `src/session/storage-utils.ts` contains storage error conversion and the
-  storage-to-Session adapter.
-- `src/context/compaction/` computes and generates compaction summaries over the
-  ordered Session entries.
+- `src/agent.ts` delegates Session lifecycle and run commands without owning
+  their behavior.
+- `src/session/agent-session-manager.ts` owns identity routing, discovery,
+  loaded runtimes, environments, and lifecycle.
+- `src/session/agent-session.ts` owns the loaded in-memory context,
+  configuration buffering, steering, notifications, and one-active-run
+  lifecycle.
+- `src/session/steering-queue.ts` owns the Session's one-at-a-time steering
+  storage and drain rollback.
+- `src/session/storage/jsonl-session-store.ts` owns JSONL parsing, validation, ordered
+  entries, serialized appends, and load-time state restoration.
+- `src/engine/agent-engine.ts` owns shared Prompt, resource, tool-factory,
+  model, request-policy, and snapshot assembly behavior.
+- `src/session/storage/session-store-lease.ts` owns per-log writer exclusion.
 
-The former `JsonlSessionRepo`, fork API, path-to-root traversal, leaf tracking,
-and repository option types have been removed. They were not used by the
-current `AgentHarness` construction path and contradicted the linear format.
+## Evolution Policy
 
-## Legacy Version 3 Sessions
-
-Version 3 represented entries as a tree using `parentId` and could persist a
-`leaf` record whose `targetId` selected the active branch. Interpreting those
-files as linear logs can silently restore the wrong conversation.
-
-For that reason, version 4 rejects version 3 files with an
-`invalid_session` error. The existing file is left unchanged. Migration, if it
-is needed later, must be an explicit tool that chooses which legacy branch to
-materialize as a new linear version 4 Session.
-
-## Future Evolution
-
-Additions that preserve linear ordering may extend version 4 when they remain
-backward-compatible. Any change that alters ordering, introduces navigation
-state, or changes the meaning of existing entries requires a new Session format
-version and an explicit compatibility or migration policy.
+The project has one supported persistence shape. Format changes must update the
+writer, parser, tests, and this document in the same change. Development data
+using a replaced shape is discarded rather than supported by alternate parsers
+or compatibility branches.

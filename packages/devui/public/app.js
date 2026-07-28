@@ -4,6 +4,13 @@ const chatEl = document.getElementById("chat");
 const traceEl = document.getElementById("trace");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
+let sessionId = null;
+let currentRunId = null;
+const settledRunIds = new Set();
+
+function modelLabel(model) {
+	return model?.providerId && model?.modelId ? `${model.providerId}/${model.modelId}` : "unknown";
+}
 
 /** Extract plain text from an AgentMessage's content (string or content-part array). */
 function messageText(message) {
@@ -51,12 +58,16 @@ function handleEvent(event) {
 	addTrace(event);
 
 	if (event.type === "server_ready") {
-		modelEl.textContent = `model: ${event.modelId}`;
+		modelEl.textContent = `model: ${modelLabel(event.model)}`;
 		return;
 	}
 	if (event.type === "server_error") {
 		addBubble("error", event.message);
 		assistantBubble = null;
+		return;
+	}
+	if (event.type === "run_settled") {
+		if (event.status === "failed") addBubble("error", event.error?.message ?? "run failed");
 		return;
 	}
 
@@ -89,35 +100,79 @@ function handleEvent(event) {
 }
 
 function connect() {
-	const source = new EventSource("/api/events");
+	const source = new EventSource(`/api/sessions/${encodeURIComponent(sessionId)}/events`);
 	source.onopen = () => statusEl.className = "status connected";
 	source.onerror = () => statusEl.className = "status error";
 	source.onmessage = (e) => {
 		try {
-			handleEvent(JSON.parse(e.data));
+			const payload = JSON.parse(e.data);
+			if (payload.type === "server_ready") handleEvent(payload);
+			else if (payload.event) {
+				if (payload.event.type === "run_settled") {
+					settledRunIds.add(payload.runId);
+					if (currentRunId === payload.runId) currentRunId = null;
+				} else if (payload.runId) currentRunId = payload.runId;
+				handleEvent(payload.event);
+			}
 		} catch (err) {
 			console.error("bad event", e.data, err);
 		}
 	};
 }
 
+async function bootstrap() {
+	const runtimeResponse = await fetch("/api/runtime");
+	if (!runtimeResponse.ok) throw new Error(`runtime discovery failed: ${runtimeResponse.status}`);
+	const runtime = await runtimeResponse.json();
+	sessionId = runtime.defaultSessionId;
+	modelEl.textContent = `model: ${modelLabel(runtime.model)}`;
+	const snapshotResponse = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+	if (!snapshotResponse.ok) throw new Error(`session discovery failed: ${snapshotResponse.status}`);
+	const snapshot = await snapshotResponse.json();
+	currentRunId = snapshot.currentRunId ?? null;
+	connect();
+}
+
 form.addEventListener("submit", async (e) => {
 	e.preventDefault();
 	const text = input.value.trim();
 	if (!text) return;
+	if (!sessionId) {
+		addBubble("error", "runtime is not ready");
+		return;
+	}
 	input.value = "";
 	// The user bubble is rendered from the message_start(user) event (see
 	// handleEvent), not optimistically here, so browser and agent prompts match.
-	const res = await fetch("/api/prompt", {
+	const targetRunId = currentRunId;
+	const path = targetRunId
+		? `/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(targetRunId)}/steer`
+		: `/api/sessions/${encodeURIComponent(sessionId)}/runs`;
+	const res = await fetch(path, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ text }),
 	});
-	if (!res.ok) addBubble("error", `prompt failed: ${res.status}`);
+	if (!res.ok) {
+		addBubble("error", `prompt failed: ${res.status}`);
+		return;
+	}
+	if (!targetRunId) {
+		const accepted = await res.json();
+		if (settledRunIds.has(accepted.runId)) settledRunIds.delete(accepted.runId);
+		else currentRunId = accepted.runId;
+	}
 });
 
 document.getElementById("abort").addEventListener("click", () => {
-	fetch("/api/abort", { method: "POST" });
+	if (!sessionId || !currentRunId) return;
+	fetch(
+		`/api/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(currentRunId)}/abort`,
+		{ method: "POST" },
+	);
 });
 
-connect();
+bootstrap().catch((error) => {
+	statusEl.className = "status error";
+	addBubble("error", error.message);
+});

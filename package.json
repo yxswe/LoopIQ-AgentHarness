@@ -1,15 +1,13 @@
 {
-	"name": "loopiq-agent-harness",
+	"name": "loopiq-agent",
 	"private": true,
 	"type": "module",
 	"workspaces": ["packages/*"],
 	"scripts": {
 		"clean": "npm run clean --workspaces --if-present",
-		"build": "cd packages/ai && npm run build && cd ../agent && npm run build",
+		"build": "npm run build -w @loopiq/ai && npm run build -w @loopiq/agent && npm run build -w @loopiq/cli",
 		"test": "npm run test --workspaces --if-present",
 		"check": "biome check --write .",
-		"presmoke": "npm run build",
-		"smoke": "tsx examples/smoke.ts",
 		"devui": "npm run server -w @loopiq/server"
 	},
 	"devDependencies": {
@@ -17,7 +15,6 @@
 		"@types/node": "22.19.19",
 		"@typescript/native-preview": "7.0.0-dev.20260120.1",
 		"shx": "0.4.0",
-		"tsx": "4.22.1",
 		"typescript": "5.9.3"
 	},
 	"engines": {

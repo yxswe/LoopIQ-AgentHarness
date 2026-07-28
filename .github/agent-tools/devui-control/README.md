@@ -1,7 +1,8 @@
 # devui-control
 
-Control the **devui** AgentHarness server from the command line, the same way a
-human drives the browser devui. This tool talks to the single shared session, so
+Control the **devui** agent runtime from the command line, the same way a human
+drives the browser devui. This tool discovers the browser's Session and uses the
+Session-scoped API, so
 anything you send here also appears on the browser devui as a user message, and
 you observe the exact same event/debug stream a human sees.
 
@@ -49,8 +50,8 @@ node .github/agent-tools/devui-control/devctl.mjs <command> [args]
 node .github/agent-tools/devui-control/devctl.mjs send "list the files in this repo"
 ```
 
-Opens the event stream, submits the prompt, blocks until the turn settles
-(`agent_end`), then prints the assistant's final reply to stdout. The prompt and
+Opens the Session event stream, submits the prompt, blocks until the run settles
+(`run_settled`), then prints the assistant's final reply to stdout. The prompt and
 the streamed reply also show up live on the browser devui.
 
 ### abort — stop the current turn
@@ -73,10 +74,10 @@ the browser devui shows on the right. Useful to observe a turn started elsewhere
 
 ## Notes and limitations
 
-- **Single shared session.** This tool and the browser devui drive and observe the
-  *same* agent. Sends interleave; run `send` when the agent is idle for clean
-  one-shot request/reply behavior.
+- **Shared browser Session.** The tool discovers the DevUI's `defaultSessionId`
+  from `/api/runtime`; all run, steer, abort, and event calls then carry explicit
+  Session and run IDs.
 - **No history replay.** `watch` and `send` only see events from the moment they
   connect. Events emitted before connecting are not replayed.
-- **Blocking send assumption.** `send` returns on the next `agent_end` after its
-  prompt. If a human sends concurrently, output may interleave.
+- **Blocking send assumption.** `send` returns on the matching `run_settled`
+  event. A send during an active run becomes explicit steering for that run.

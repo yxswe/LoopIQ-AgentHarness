@@ -7,8 +7,7 @@
 		"test": "vitest --run --passWithNoTests"
 	},
 	"dependencies": {
-		"@loopiq/agent-core": "*",
-		"@loopiq/ai": "*"
+		"@loopiq/agent": "*"
 	},
 	"devDependencies": {
 		"@types/node": "24.12.4",

@@ -8,8 +8,7 @@
 			"@loopiq/ai/oauth": ["./packages/ai/src/oauth.ts"],
 			"@loopiq/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
 			"@loopiq/ai/dist/*": ["./packages/ai/src/*"],
-			"@loopiq/agent-core": ["./packages/agent-harness/src/index.ts"],
-			"@loopiq/agent-core/*": ["./packages/agent-harness/src/*.ts"],
+			"@loopiq/agent": ["./packages/agent/src/index.ts"],
 			"typebox": ["./node_modules/typebox"]
 		}
 	},
