@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last audited: 2026-07-26
+Last audited: 2026-07-30
 
 This document explains the implemented `AgentRun` behavior for readers with no
 prior knowledge of LoopIQ Agent. It focuses on the execution kernel: how
@@ -47,9 +47,9 @@ Application adapter (CLI or server)
 
 - `Agent` is the sole adapter-facing entry and returns only snapshots, handles,
   results, and events.
-- `AgentEngine` owns shared model lookup/streaming, System Prompt, Skills,
-  Prompt Templates, tool creation, Provider policy, and Turn snapshot assembly.
-  It has no current Session or current run.
+- `AgentEngine` owns shared model lookup/streaming, the static System Prompt,
+  Provider policy, and Turn snapshot assembly. It has no current Session or
+  current run.
 - `AgentSession` owns durable history, loaded in-memory messages, configuration,
   tool instances, the steering queue, event subscribers, persistence, and the
   one-active-run lifecycle.
@@ -156,8 +156,8 @@ The Session copies its loaded in-memory messages once for `AgentRunInput`. It
 also asks the Engine to build the first `TurnState` from:
 
 - the current model and thinking level;
-- Engine-created Session tools;
-- the Engine-owned System Prompt, Skills, and Prompt Templates;
+- Session-created tools;
+- the Engine-owned static System Prompt;
 - the current Agent-wide Provider request policy.
 
 It then calls the shared engine with the input and a run-bound port. The engine
@@ -217,13 +217,17 @@ Provider events are translated into the public message lifecycle:
 
 ```text
 provider start  -> message_start
-text/thinking/tool-call deltas -> message_update
+text/thinking/tool-call progress -> bounded message_update
 provider done or error -> finalize message -> message_end
 ```
 
-Partial assistant messages are visible through progress events but are not
-persisted on every delta. The final assistant message is committed before its
-`message_end` notification.
+The growing Provider partial message remains inside `AgentRun` so request-local
+context stays current. It is not copied into outward progress notifications.
+`message_update` carries only the progress kind, content index, and incremental
+delta when applicable; start/end markers carry no accumulated block content.
+The final complete assistant message is committed before its `message_end`
+notification. This keeps serialized progress proportional to generated output
+instead of repeatedly serializing the accumulated message.
 
 The inference scope is always closed in a `finally` block, preventing a later
 steering command from targeting an already-finished provider request.
@@ -277,17 +281,14 @@ After the assistant response and any tools, the run:
    context without replacing its message array;
 7. drains steering messages for the next safe point.
 
-Refreshing the snapshot allows model, thinking, System Prompt, and
-Provider-policy changes to affect a later Provider request without mutating an
-in-flight request. Message history is already current because both
-`AgentSession` and `AgentRun` append each committed message incrementally.
+Refreshing the snapshot allows model, thinking, and Provider-policy changes to
+affect a later Provider request without mutating an in-flight request. The
+System Prompt remains fixed for the Engine lifetime. Message history is already
+current because both `AgentSession` and `AgentRun` append each committed message
+incrementally.
 
 The current implementation refreshes after every successful turn, including a
 final successful turn that does not ultimately need another provider request.
-Consequently, a dynamic system-prompt provider may be called once more near the
-end of a successful run. If that refresh fails, the otherwise completed turn
-enters failure reporting. This is part of the current lifecycle contract, not an
-optimization requirement.
 
 ### Phase E: Completion
 
@@ -409,7 +410,7 @@ Persistence is an explicit engine-to-Session operation, not an event
 subscriber. This preserves a crucial invariant:
 
 ```text
-message_start and message_update may describe transient progress
+message_start and bounded message_update deltas may describe transient progress
 
 complete message
   -> append to JsonlSessionStore
@@ -508,11 +509,6 @@ aborted assistant artifact is committed, and the outcome is normally
 Whole-run abort takes precedence over steering interruption: an aborted run
 never continues merely because a steering message was also present.
 
-Dynamic system-prompt providers do not currently accept an `AbortSignal`. An
-abort during initial snapshot construction waits for that callback to finish;
-the engine then starts with an already-aborted run signal and emits the normal
-aborted artifact.
-
 ### Tool failure
 
 Missing tools, invalid arguments, and thrown tool errors become error
@@ -547,7 +543,9 @@ describes a result that has already been finalized.
 The runtime exposes read-only notifications and no interceptable hook channel.
 Notifications are awaited, so they participate in ordering and can fail a run.
 Network adapters should therefore buffer outbound SSE or similar I/O instead
-of attaching slow clients directly to the core awaited path.
+of attaching slow clients directly to the core awaited path. Streaming consumers
+append text from `message_update.update` and use the committed complete message
+from `message_end` as the authoritative final value.
 
 ## 12. Snapshot Isolation and Dynamic Configuration
 
@@ -565,9 +563,9 @@ replace that stream's model. If the run needs another turn, the refreshed
 snapshot can select the new model.
 
 `AgentSession` owns the mutable values supplied to snapshot construction;
-`AgentEngine` owns how those values are combined with Prompt, resources, Tools,
-and Provider policy. `AgentRun` consumes completed snapshots while retaining
-its own message array across Turn refreshes.
+`AgentEngine` owns how those values are combined with Prompt, Tools, and Provider
+policy. `AgentRun` consumes completed snapshots while retaining its own message
+array across Turn refreshes.
 
 ## 13. Concurrency and Identity Guarantees
 
@@ -642,7 +640,6 @@ codes without parsing assistant text.
 - In-flight provider streams and tool calls cannot be resumed after a process
   crash.
 - One Session cannot execute multiple AgentRuns simultaneously.
-- Dynamic system-prompt callbacks do not yet accept the run abort signal.
 - External resource conflicts across different Sessions are not coordinated.
 
 ## 16. Source Map

@@ -71,11 +71,3 @@ export interface PromptTemplate {
 	/** Template content. Argument placeholders are formatted by `formatPromptTemplateInvocation`. */
 	content: string;
 }
-
-/** Resources made available to explicit invocation methods and system-prompt callbacks. */
-export interface AgentResources<TSkill extends Skill = Skill, TPromptTemplate extends PromptTemplate = PromptTemplate> {
-	/** Prompt templates available for explicit invocation. */
-	promptTemplates?: TPromptTemplate[];
-	/** Skills available to the model and explicit skill invocation. */
-	skills?: TSkill[];
-}

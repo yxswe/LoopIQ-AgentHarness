@@ -209,8 +209,8 @@ async function attachRenderer(agent: Agent, sessionId: string, format: OutputFor
 			stdout.write(`${JSON.stringify(envelope)}\n`);
 			return;
 		}
-		if (envelope.event.type === "message_update" && envelope.event.assistantMessageEvent.type === "text_delta") {
-			stdout.write(envelope.event.assistantMessageEvent.delta);
+		if (envelope.event.type === "message_update" && envelope.event.update.type === "text_delta") {
+			stdout.write(envelope.event.update.delta);
 		}
 	});
 }

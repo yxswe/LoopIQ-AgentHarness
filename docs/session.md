@@ -15,8 +15,8 @@ The durable log and the loaded runtime context are separate concerns:
 - `JsonlSessionStore` validates and appends the durable log;
 - `AgentSession` restores model-visible messages once, then maintains the
   current message context incrementally in memory;
-- `AgentEngine` assembles Prompt, Tools, Skills, Prompt Templates, model
-  selection, and request policy into each Turn snapshot;
+- `AgentEngine` assembles Prompt, Tools, model selection, and request policy into
+  each Turn snapshot;
 - `AgentRun` combines its incrementally maintained message context with the
   current Turn snapshot for each Provider request.
 
@@ -122,16 +122,19 @@ The manager reads and validates the header before constructing the resumed
 `NodeExecutionEnv`; persisted `workspaceDir` is authoritative and must be an
 absolute path. Session creation normalizes a supplied relative or absolute path
 to an absolute path before writing the header. Creation and resume both require
-the path to exist and identify a directory. Loaded Sessions are single-flighted
-in-process. The writer lease is released on close, failed open, delete, or
-shutdown. A close rejected because the Session is busy retains both the loaded
-instance and its writer lease.
+the path to exist and identify a directory. One manager-owned filesystem adapter
+rooted at the Agent Home Sessions directory performs JSONL metadata reads,
+creation, opening, and every later Store append. The per-Session Workspace
+environment is never used for Agent-Home persistence. Loaded Sessions are
+single-flighted in-process. The writer lease is released on close, failed open,
+delete, or shutdown. A close rejected because the Session is busy retains both
+the loaded instance and its writer lease.
 
 `AgentSession.load()` then performs one load-time assembly:
 
 1. restore model-visible messages and the latest Session configuration from the
    validated Store state;
-2. ask `AgentEngine` to create and validate tools bound to the Session environment;
+2. create the default tools bound to the Session Workspace environment;
 3. ask `AgentEngine` to resolve the selected model;
 4. retain the resulting configuration, tool instances, and messages in memory.
 
@@ -173,16 +176,17 @@ configuration and never enter model context.
 - `src/agent.ts` delegates Session lifecycle and run commands without owning
   their behavior.
 - `src/session/agent-session-manager.ts` owns identity routing, discovery,
-  loaded runtimes, environments, and lifecycle.
+  the Agent-Home Session-store filesystem, loaded runtimes, Workspace
+  environments, and lifecycle.
 - `src/session/agent-session.ts` owns the loaded in-memory context,
-  configuration buffering, steering, notifications, and one-active-run
-  lifecycle.
+  environment-bound tools, configuration buffering, steering, notifications,
+  and one-active-run lifecycle.
 - `src/session/steering-queue.ts` owns the Session's one-at-a-time steering
   storage and drain rollback.
 - `src/session/storage/jsonl-session-store.ts` owns JSONL parsing, validation, ordered
   entries, serialized appends, and load-time state restoration.
-- `src/engine/agent-engine.ts` owns shared Prompt, resource, tool-factory,
-  model, request-policy, and snapshot assembly behavior.
+- `src/engine/agent-engine.ts` owns shared Prompt, model, request-policy, and
+  snapshot assembly behavior.
 - `src/session/storage/session-store-lease.ts` owns per-log writer exclusion.
 
 ## Evolution Policy

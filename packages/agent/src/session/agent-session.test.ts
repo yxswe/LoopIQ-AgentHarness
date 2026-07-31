@@ -1,10 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createModels, fauxAssistantMessage, fauxProvider, Type } from "@loopiq/ai";
+import { createModels, fauxAssistantMessage, fauxProvider } from "@loopiq/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PROVIDER_REQUEST_POLICY } from "../base/options.ts";
-import type { AgentTool } from "../base/resource.ts";
 import { AgentEngine } from "../engine/agent-engine.ts";
 import { NodeExecutionEnv } from "../env/nodejs.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -42,8 +41,12 @@ async function createRuntime(name: string, dependencies: ReturnType<typeof creat
 	return (await createRuntimeWithStore(name, dependencies)).session;
 }
 
-function createDependencies(options?: { tokensPerSecond?: number }) {
-	const faux = fauxProvider({ provider: `faux-${Math.random()}`, tokensPerSecond: options?.tokensPerSecond });
+function createDependencies(options?: { tokensPerSecond?: number; tokenSize?: number }) {
+	const faux = fauxProvider({
+		provider: `faux-${Math.random()}`,
+		tokensPerSecond: options?.tokensPerSecond,
+		tokenSize: options?.tokenSize ? { min: options.tokenSize, max: options.tokenSize } : undefined,
+	});
 	const models = createModels();
 	models.setProvider(faux.provider);
 	return {
@@ -52,7 +55,6 @@ function createDependencies(options?: { tokensPerSecond?: number }) {
 		engine: new AgentEngine({
 			models,
 			getProviderRequestPolicy: () => DEFAULT_PROVIDER_REQUEST_POLICY,
-			systemPrompt: ({ sessionId }) => `system-${sessionId}`,
 		}),
 	};
 }
@@ -62,43 +64,23 @@ function assistantText(message: { content: Array<{ type: string; text?: string }
 }
 
 describe("AgentSession", () => {
-	it("uses Engine-owned tools, resources, and System Prompt assembly for every Session", async () => {
+	it("uses Session-owned default tools and the Engine-owned static System Prompt", async () => {
 		const faux = fauxProvider({ provider: `faux-${Math.random()}` });
 		const models = createModels();
 		models.setProvider(faux.provider);
-		const createdTools: AgentTool[] = [];
+		const observedToolSets: Array<Array<{ name: string }>> = [];
 		const engine = new AgentEngine({
 			models,
 			getProviderRequestPolicy: () => DEFAULT_PROVIDER_REQUEST_POLICY,
-			createTools: () => {
-				const tool: AgentTool = {
-					name: "Inspect",
-					label: "Inspect",
-					description: "Inspect Engine ownership in tests.",
-					parameters: Type.Object({}),
-					async execute() {
-						return { content: [{ type: "text", text: "ok" }], details: {} };
-					},
-				};
-				createdTools.push(tool);
-				return [tool];
-			},
-			resources: {
-				skills: [{ name: "review", description: "Review code", content: "Review.", filePath: "/skills/review" }],
-				promptTemplates: [{ name: "explain", content: "Explain this code." }],
-			},
-			systemPrompt: ({ tools, resources }) =>
-				JSON.stringify({
-					tools: tools.map((tool) => tool.name),
-					skills: resources.skills?.map((skill) => skill.name),
-					promptTemplates: resources.promptTemplates?.map((template) => template.name),
-				}),
 		});
 		const dependencies = { faux, model: faux.getModel(), engine };
-		faux.setResponses([
-			(context) => fauxAssistantMessage(context.systemPrompt ?? ""),
-			(context) => fauxAssistantMessage(context.systemPrompt ?? ""),
-		]);
+		const respond = (context: { systemPrompt?: string; tools?: Array<{ name: string }> }) => {
+			if (context.tools) {
+				observedToolSets.push(context.tools);
+			}
+			return fauxAssistantMessage(context.systemPrompt ?? "");
+		};
+		faux.setResponses([respond, respond]);
 		const sessionA = await createRuntime("engine-assets-a", dependencies);
 		const sessionB = await createRuntime("engine-assets-b", dependencies);
 
@@ -107,13 +89,10 @@ describe("AgentSession", () => {
 			sessionB.startRun({ text: "beta" }).result,
 		]);
 
-		expect(createdTools).toHaveLength(2);
-		expect(createdTools[0]).not.toBe(createdTools[1]);
+		expect(new Set(observedToolSets.map((tools) => tools[0])).size).toBe(2);
 		for (const result of [resultA, resultB]) {
 			const text = assistantText(result.finalMessage);
-			expect(text).toContain('"tools":["Inspect"]');
-			expect(text).toContain('"skills":["review"]');
-			expect(text).toContain('"promptTemplates":["explain"]');
+			expect(text).toBe("You are a helpful coding agent running inside LoopIQ Agent.");
 		}
 	});
 
@@ -164,10 +143,10 @@ describe("AgentSession", () => {
 
 		expect(resultA.status).toBe("completed");
 		expect(resultB.status).toBe("completed");
-		expect(assistantText(resultA.finalMessage)).toContain("system-session-a");
+		expect(assistantText(resultA.finalMessage)).toContain("LoopIQ Agent");
 		expect(assistantText(resultA.finalMessage)).toContain("alpha");
 		expect(assistantText(resultA.finalMessage)).not.toContain("beta");
-		expect(assistantText(resultB.finalMessage)).toContain("system-session-b");
+		expect(assistantText(resultB.finalMessage)).toContain("LoopIQ Agent");
 		expect(assistantText(resultB.finalMessage)).toContain("beta");
 		expect(assistantText(resultB.finalMessage)).not.toContain("alpha");
 	});
@@ -225,6 +204,33 @@ describe("AgentSession", () => {
 		expect(envelopes.filter((event) => event.type !== "abort").every((event) => event.runId === handle.runId)).toBe(
 			true,
 		);
+	});
+
+	it("emits bounded assistant deltas without repeated partial messages", async () => {
+		const dependencies = createDependencies({ tokenSize: 10 });
+		const shortText = "a".repeat(400);
+		const longText = "b".repeat(4_000);
+		dependencies.faux.setResponses([fauxAssistantMessage(shortText), fauxAssistantMessage(longText)]);
+		const session = await createRuntime("bounded-progress", dependencies);
+		const progress = new Map<string, { bytes: number; text: string }>();
+		session.subscribe((envelope) => {
+			if (!envelope.runId || envelope.event.type !== "message_update") return;
+			expect(Object.keys(envelope.event)).toEqual(["type", "update"]);
+			expect(envelope.event.update).not.toHaveProperty("partial");
+			const current = progress.get(envelope.runId) ?? { bytes: 0, text: "" };
+			current.bytes += JSON.stringify(envelope.event).length;
+			if (envelope.event.update.type === "text_delta") current.text += envelope.event.update.delta;
+			progress.set(envelope.runId, current);
+		});
+
+		const shortRun = session.startRun({ text: "short" });
+		await shortRun.result;
+		const longRun = session.startRun({ text: "long" });
+		await longRun.result;
+
+		expect(progress.get(shortRun.runId)?.text).toBe(shortText);
+		expect(progress.get(longRun.runId)?.text).toBe(longText);
+		expect(progress.get(longRun.runId)!.bytes).toBeLessThan(progress.get(shortRun.runId)!.bytes * 12);
 	});
 
 	it("interrupts only provider inference for steering and continues the same run", async () => {

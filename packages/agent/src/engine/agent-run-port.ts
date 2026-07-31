@@ -8,6 +8,6 @@ export interface AgentRunPort {
 	drainSteering(): Promise<AgentMessage[]>;
 	commitMessage(message: AgentMessage): Promise<void>;
 	flushPendingSessionState(): Promise<boolean>;
-	createTurnSnapshot(): Promise<TurnState>;
+	createTurnSnapshot(): TurnState;
 	emit(event: AgentEngineEvent): Promise<void>;
 }

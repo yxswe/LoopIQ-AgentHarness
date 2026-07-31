@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last reviewed: 2026-07-27
+Last reviewed: 2026-07-28
 
 This document defines the implemented ownership and persistence boundaries between
 the Agent, LLM providers, credentials, Sessions, the Server, and the CLI. It is
@@ -587,11 +587,11 @@ operation.
 
 ### D13. AgentEngine owns shared execution assets, not provider management
 
-`AgentEngine` remains Session-stateless. It owns the System Prompt, Skills,
-Prompt Templates, Session tool factory, model lookup/streaming capabilities,
-Provider request policy access, and Turn snapshot assembly. It does not gain
-provider registration, credential persistence, login, or catalog-refresh
-responsibilities.
+`AgentEngine` remains Session-stateless. It imports and owns the static System
+Prompt from `packages/agent/src/prompts/system-prompt.ts`, model lookup/streaming
+capabilities, Provider request policy access, and Turn snapshot assembly. It does
+not gain provider registration, credential persistence, login, or
+catalog-refresh responsibilities.
 
 `ModelRuntime` supplies the narrow model lookup and streaming capabilities used
 by the engine. The engine and `AgentRun` do not receive the credential store,

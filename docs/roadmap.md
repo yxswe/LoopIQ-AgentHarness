@@ -172,30 +172,40 @@ events.
 batches, pre-truncated built-in results, replay from Session, and unavailable raw
 result storage.
 
-### P2: Skill tool
+### P2: Agent resources and Skill tool
 
 **Why**: skill discovery, validation, and invocation formatting already exist,
 but there is no default model-callable tool for selecting and loading a skill on
-demand. Applications must manually embed skill behavior in their system prompt.
+demand. Prompt-template discovery and formatting also exist without a production
+owner or invocation path. The previous generic resources constructor option
+passed empty data through the runtime without solving either problem.
 
 **Scope**:
-- Add a `Skill` tool backed by `AgentResources.skills`, exposing only
+- Define the supported Skill and Prompt Template sources, precedence, duplicate
+  handling, loading lifetime, and the Agent subsystem that owns the validated
+  catalogs. Do not restore a generic resources constructor option before these
+  policies and real consumers exist.
+- Add a `Skill` tool backed by the Engine-owned Skill catalog, exposing only
   model-invocable skill names and descriptions in its schema or prompt surface.
 - Resolve a selected skill to `formatSkillInvocation()` content while honoring
   `disableModelInvocation`, duplicate-name validation, and relative reference
   locations.
+- Add explicit Prompt Template listing and invocation through Agent-owned
+  operations so adapters route commands without loading or formatting templates
+  themselves.
 - Define unknown/disabled skill errors and whether additional user instructions
   can accompany invocation.
-- Keep resources construction-time fixed; adding this tool must not implicitly
-  introduce runtime resource mutation.
+- Keep each loaded catalog stable for its defined lifetime; adding these
+  consumers must not implicitly introduce runtime resource mutation.
 
 **Observability**: emit selected skill identity, source path/provenance when
 available, resolution failure, and invocation size without logging the full
 skill body by default.
 
-**Tests**: successful invocation, unknown and disabled skills, duplicate names,
-relative reference location, optional additional instructions, and resource
-snapshot behavior across turns.
+**Tests**: successful Skill and Prompt Template invocation, listing, unknown and
+disabled Skills, unknown templates, duplicate names, source precedence, relative
+reference location, optional additional instructions, and catalog snapshot
+behavior across Runs.
 
 ## 2. Advanced Workspace grounding
 
@@ -208,8 +218,9 @@ grounding or security model.
 
 **Why**: The model is not told which Workspace it is operating in, project
 instructions are not discovered, and the current environment accepts absolute
-paths outside the Workspace. The fixed one-sentence default System Prompt also
-does not describe the Agent's tools, resources, or Workspace policy.
+paths outside the Workspace. The fixed one-sentence System Prompt defined in
+`packages/agent/src/prompts/system-prompt.ts` also does not describe the Agent's
+tools, resources, or Workspace policy.
 
 **Scope**:
 - Replace the fixed default string with an Agent-owned `buildSystemPrompt()`
@@ -222,9 +233,9 @@ does not describe the Agent's tools, resources, or Workspace policy.
   filesystem/network policy. Send deterministic diffs when mutable environment
   state changes instead of repeating unchanged content on every request.
 - Add optional `promptSnippet` and `promptGuidelines` metadata to `AgentTool`.
-  Include only Engine-provided tools, deduplicate normalized guidelines, and keep full
-  parameter documentation in tool schemas instead of repeating it in the
-  system prompt.
+  Include only Session-created tools, deduplicate normalized guidelines, and
+  keep full parameter documentation in tool schemas instead of repeating it in
+  the system prompt.
 - Load project instructions from `AGENTS.md` (and deliberately supported
   aliases) from the Session Workspace to its project root with deterministic
   outer-to-inner precedence. Preserve each source path and wrap file contents in
@@ -238,16 +249,17 @@ does not describe the Agent's tools, resources, or Workspace policy.
   absolute paths, symlink traversal, command working directories, and writes
   that escape the authorized roots unless a separately designed permission
   grant allows them.
-- Append the existing model-visible Skills block only when an Engine-owned tool can
-  retrieve the referenced skill file. Keep disabled skills out of the prompt and
-  preserve absolute skill locations for relative-reference resolution.
+- Append the existing model-visible Skills block only when the Session-owned
+  Skill tool can retrieve the referenced skill file. Keep disabled skills out of
+  the prompt and preserve absolute skill locations for relative-reference
+  resolution.
 - Add the current date in stable `YYYY-MM-DD` form and the normalized Session
   Workspace near the end of the prompt. Do not include current time, random
   identifiers, or other values that unnecessarily invalidate provider prompt
   caches.
-- Build the prompt while capturing the Run snapshot. Engine-owned tool or
-  project-instruction changes made during an active Run affect the next Run,
-  not a later Provider request inside the current Run.
+- Build the prompt while capturing the Run snapshot. Session tool or
+  project-instruction changes made during an active Run affect the next Run, not
+  a later Provider request inside the current Run.
 - Keep ownership inside Agent. CLI and Server may expose Agent configuration or
   resource-management operations later, but they must not construct different
   base identities or independently concatenate prompt fragments.
@@ -445,3 +457,107 @@ and which plugin handled each event; make plugin errors non-fatal and visible.
 
 **Tests**: manifest parsing/compat for both marketplace formats, hook
 ordering/short-circuit semantics, plugin failure isolation, and sandboxing.
+
+## 10. Multimodal input: text and images
+
+**Current baseline**: `AgentInput` requires text and optionally accepts
+`ImageContent[]`; `createUserMessage()` can place text and images in one user
+message, JSONL can persist that message shape, and the `Read` tool can return
+PNG/JPEG/GIF/WebP content. The current Session validation still rejects an
+image-only request, adapters do not provide one consistent image-input path, and
+there is no application-level size, format, model-capability, or persistence
+policy.
+
+**Why**: Image understanding must work consistently through Agent, Session,
+Provider selection, CLI, Server, DevUI, persistence, steering, and replay. A
+partial type-level capability is insufficient and currently produces confusing
+behavior such as rejecting a valid image-only prompt before a Run is accepted.
+
+**Scope**:
+- Define one Agent-owned, serializable input contract for text-only, image-only,
+  and mixed text/image requests. Reject only when both text and images are
+  absent, and use the same validation for Run start and steering.
+- Normalize user messages without inserting an empty text block for image-only
+  input. Preserve deterministic text/image ordering and define whether adapters
+  may interleave multiple text and image blocks or only submit one text block
+  followed by images.
+- Support only text and raster images. Audio, video, PDF/document attachments,
+  arbitrary binary files, and image generation remain out of scope until
+  separately designed.
+- Define accepted MIME types, encoding, maximum image count, per-image and
+  per-request byte limits, malformed-data handling, optional dimension limits,
+  and whether metadata is trusted or detected from content.
+- Validate the selected model's image-input capability before starting a
+  Provider request and return a stable Agent error when the model cannot accept
+  images. Provider-specific encoding remains inside `@loopiq/ai`.
+- Define how image payloads are persisted and restored without allowing
+  unbounded JSONL growth. Decide whether bounded inline data is sufficient or a
+  separate Agent-Home blob store with durable references is required.
+- Add equivalent image submission to CLI, Server, and DevUI without making
+  adapters own message normalization. Define CLI file arguments/stdin behavior,
+  HTTP upload and request-size limits, browser preview/removal, and
+  machine-readable input/output shapes.
+- Ensure image-bearing steering, abort, Session close/reopen, replay, context
+  accounting, and future compaction preserve valid model-visible content.
+
+**Observability**: report content kinds, image count, MIME types, encoded and
+decoded sizes, normalization decisions, capability rejection, and persistence
+mode without logging image bytes or sensitive image-derived content.
+
+**Tests**: text-only, image-only, mixed input, empty rejection, multiple images,
+ordering, supported and unsupported MIME types, corrupt encodings, all size
+boundaries, unsupported models, steering and abort, JSONL close/reopen, tool
+image results, CLI/HTTP/DevUI submission, and redacted structured events.
+
+## 11. Run usage and reliable Session event delivery
+
+**Current baseline**: Provider usage is available on individual assistant
+messages, but neither `RunResult` nor `run_settled` exposes aggregate usage for
+the whole Run. `AgentSession` starts execution independently from subscription,
+keeps no event replay buffer, and awaits subscribed listeners one by one. A late
+subscriber can therefore miss early events, while a slow or failing subscriber
+can delay or fail the active Run.
+
+**Why**: CLI, Server, DevUI, and automation need one efficient and deterministic
+Run-output contract. Requiring adapters to rebuild usage totals produces
+inconsistent accounting, and coupling Run execution to live callbacks makes
+event delivery timing part of core execution correctness.
+
+**Scope**:
+- Aggregate provider-reported usage and cost across every assistant inference
+  produced by one Run, including tool continuations and interrupted steering.
+  Preserve per-inference usage on assistant messages, expose the aggregate on
+  `RunResult` and `run_settled`, and define unknown/partial usage semantics
+  without double-counting reasoning tokens that are already included in output.
+- Keep output production and delivery ownership separate. `AgentRun` owns event
+  content and Run usage; the Run-bound port forwards events; `AgentSession` owns
+  envelope identity, per-Session ordering, subscribers, buffering, and delivery.
+  Do not move subscriber state into the shared Engine or inject adapter callbacks
+  into `AgentRun`.
+- Prevent subscription timing from losing accepted-Run events. Define a bounded
+  current-runtime replay or pre-registered run-scoped stream using the existing
+  `runtimeId` and sequence identity, including cursor/gap behavior and the exact
+  boundary between in-memory recovery and any future durable replay.
+- Replace sequential awaited callbacks with bounded, ordered delivery per
+  subscriber. A slow, failed, disconnected, or overflowing observer must not
+  block or fail the Run; define overflow, error reporting, terminal-event
+  enqueue, unsubscribe, and cleanup semantics explicitly.
+- Map the same contract through CLI JSON/JSONL, Server SSE, DevUI, and
+  `devui-control`. SSE must expose event identity suitable for reconnect/resume,
+  while adapters retain ownership of rendering, transport backpressure, and
+  sensitive-data redaction.
+- Keep complete-message persistence independent from notification delivery.
+  `message_end` must still describe a committed Session message. Do not add
+  event variants to Session JSONL unless durable replay is designed as one
+  cohesive storage and restoration feature.
+
+**Observability**: report Run-level input/output/cache/reasoning tokens and cost,
+subscriber queue depth, delivery lag, replayed events, cursor gaps,
+overflow/disconnect decisions, and listener failures without logging model
+content merely to produce metrics.
+
+**Tests**: aggregate usage across direct, multi-tool, interrupted-steering,
+aborted, and failed Runs; cover subscribe-before-run, subscribe-after-start,
+reconnect/cursor gaps, slow and failing subscribers, per-subscriber ordering,
+bounded overflow, unsubscribe, terminal delivery, and equivalent CLI
+JSONL/Server SSE/DevUI behavior.

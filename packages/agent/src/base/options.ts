@@ -1,7 +1,5 @@
-import type { Model } from "@loopiq/ai";
-import type { ExecutionEnv } from "./env.ts";
 import type { AgentMessage } from "./messages.ts";
-import type { AgentResources, AgentTool } from "./resource.ts";
+import type { AgentTool } from "./resource.ts";
 
 export interface ModelReference {
 	providerId: string;
@@ -33,17 +31,6 @@ export const DEFAULT_PROVIDER_REQUEST_POLICY: ProviderRequestPolicy = {
 	maxRetryDelayMs: 60_000,
 	cacheRetention: "short",
 };
-
-export type AgentSystemPrompt =
-	| string
-	| ((context: {
-			env: ExecutionEnv;
-			sessionId: string;
-			model: Model<any>;
-			thinkingLevel: ThinkingLevel;
-			tools: AgentTool[];
-			resources: AgentResources;
-	  }) => string | Promise<string>);
 
 /**
  * Thinking/reasoning level for models that support it.

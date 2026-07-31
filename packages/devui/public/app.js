@@ -86,9 +86,9 @@ function handleEvent(event) {
 		assistantBubble = addBubble("assistant", "");
 		return;
 	}
-	if (event.type === "message_update" && role === "assistant") {
+	if (event.type === "message_update" && event.update.type === "text_delta") {
 		if (!assistantBubble) assistantBubble = addBubble("assistant", "");
-		assistantBubble.textContent = messageText(message);
+		assistantBubble.textContent += event.update.delta;
 		chatEl.scrollTop = chatEl.scrollHeight;
 		return;
 	}
