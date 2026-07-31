@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last audited: 2026-07-27
+Last audited: 2026-07-30
 
 This document defines current multi-Session ownership, concurrency, hosting, and
 adapter contracts. `Agent` is the sole application entry; concrete hosts,
@@ -53,15 +53,16 @@ Different Sessions may use the same `workspaceDir` and still run concurrently.
 | Persisted Agent settings | `FileAgentSettingsStore` (`agent.json`) |
 | Persisted provider credentials | `FileCredentialStore` (`credentials.json`) |
 | Online credential-validation cache | `ModelRuntime` memory |
-| Model lookup/streaming, System Prompt, Skills, Prompt Templates, and tool factory | `AgentEngine` |
+| Model lookup/streaming and System Prompt | `AgentEngine` |
 | Loaded model-visible message context | `AgentSession` memory |
 | Stable current-Turn snapshot | One `AgentRun` |
 | Provider stream and partial assistant message | One `AgentRun` |
 | Run input, pending messages, and outcome | One `AgentRun` |
 | Session Store and pending configuration snapshot | `AgentSession` |
+| Agent-Home JSONL filesystem operations | `AgentSessionManager` |
 | Steering queue and one-at-a-time drain policy | `AgentSession` |
 | Session model/thinking selection | `AgentSession` |
-| Tool instances and `ExecutionEnv` | `AgentSession` |
+| Default tool construction, tool instances, Provider Session-resource cleanup, and `ExecutionEnv` | `AgentSession` |
 | Notification subscribers and event sequence | `AgentSession` |
 | Lifecycle state and run control channel | `AgentSession` |
 | Loaded Session map, discovery, file paths, environment, and writer lease | `AgentSessionManager` |
@@ -111,23 +112,19 @@ objects.
 ## Internal AgentEngine
 
 `AgentEngine` is Session-stateless. It retains shared application execution
-assets: model lookup/streaming, System Prompt policy, Skills and Prompt
-Templates, the Session tool factory, and Provider request policy. It must not
-retain a current Session, run, message context, steering queue, Store, or abort
-controller.
+assets: model lookup/streaming, the static System Prompt imported from
+`packages/agent/src/prompts/system-prompt.ts`, and Provider request policy. It
+must not retain a current Session, run, message context, steering queue, Store,
+or abort controller.
 
 ```ts
 export class AgentEngine {
   resolveModel(reference: ModelReference): Model;
-  createSessionTools(env: ExecutionEnv): Promise<AgentTool[]>;
   createTurnSnapshot(input: {
-    sessionId: string;
-    env: ExecutionEnv;
     model: Model;
     thinkingLevel: ThinkingLevel;
     tools: AgentTool[];
-  }): Promise<TurnState>;
-  cleanupSession(sessionId: string): void;
+  }): TurnState;
   run(input: AgentRunInput, port: AgentRunPort): Promise<AgentRunOutcome>;
 }
 ```
@@ -144,7 +141,7 @@ export interface AgentRunPort {
   drainSteering(): Promise<AgentMessage[]>;
   commitMessage(message: AgentMessage): Promise<void>;
   flushPendingSessionState(): Promise<boolean>;
-  createTurnSnapshot(): Promise<TurnState>;
+  createTurnSnapshot(): TurnState;
   emit(event: AgentEngineEvent): Promise<void>;
 }
 ```
@@ -164,7 +161,8 @@ Each loaded Session owns:
 
 - durable Session identity and metadata;
 - `JsonlSessionStore`, `ExecutionEnv`, and the loaded message array;
-- instantiated tools;
+- default tool construction and instantiated tools;
+- Provider Session-resource cleanup at close;
 - model, thinking level, and pending persisted configuration;
 - one steering queue with a fixed one-at-a-time drain policy;
 - notification subscribers, runtime ID, and event sequence;
@@ -194,7 +192,8 @@ use two channels:
 
 Run-to-Session information is incremental:
 
-1. progress events stream through the run-bound port;
+1. bounded progress deltas stream through the run-bound port while growing
+   Provider partial messages remain inside the Run;
 2. complete messages are committed immediately;
 3. `message_end` follows successful commit;
 4. turn boundaries flush pending configuration and refresh Engine-owned
@@ -230,9 +229,9 @@ export class AgentSessionManager {
 
 `createAgent()` constructs exactly one internal `AgentEngine` and passes it to
 the manager. The manager shares that Engine across loaded Sessions but does not
-configure prompts, resources, tools, models, or Provider policy. It receives one
-narrow `resolveSwitchableModel()` capability from `ModelRuntime`; Provider
-credential validation and model-catalog rules remain model-owned.
+configure prompts, tools, models, or Provider policy. It receives one narrow
+`resolveSwitchableModel()` capability from `ModelRuntime`; Provider credential
+validation and model-catalog rules remain model-owned.
 
 Opening an already loaded Session returns the same `AgentSession`. Concurrent
 opens of one unloaded Session share one initialization promise. Failed
@@ -254,11 +253,12 @@ The default layout is:
 
 The JSONL header's normalized absolute `workspaceDir` is authoritative on
 resume. Creation and resume reject a missing or non-directory Workspace. The
-manager maps that path to `NodeExecutionEnv.cwd`, reconstructs the Store, then
-`AgentSession.load()` asks the Engine for model resolution and tool creation and
-restores the in-memory message context once before publishing the loaded
-instance. Agent Home contains Agent-owned state; it is never used as the
-Session's Workspace implicitly.
+manager uses one Agent-Home filesystem adapter for JSONL metadata and Store I/O,
+then separately maps `workspaceDir` to `NodeExecutionEnv.cwd` for Session tools.
+`AgentSession.load()` asks the Engine only for model resolution, creates its
+environment-bound default tools, and restores the in-memory message context once
+before publishing the loaded instance. Agent Home contains Agent-owned state; it
+is never used as the Session's Workspace implicitly.
 
 ## Writer Lease
 
@@ -312,6 +312,11 @@ export interface AgentEventEnvelope {
 
 `runtimeId` identifies one loaded lifetime. Sequence increases within that
 lifetime and may reset after reopen. No ordering is promised across Sessions.
+
+Assistant `message_update` envelopes contain an Agent-owned bounded update with
+content kind, content index, and delta where applicable. They do not carry the
+Provider's accumulated partial message. `message_start` opens the lifecycle and
+the committed `message_end` carries the complete authoritative message.
 
 `run_settled` is the terminal contract for an accepted run. Its observer cannot
 rewrite the result it describes. Adapters redact sensitive payloads before

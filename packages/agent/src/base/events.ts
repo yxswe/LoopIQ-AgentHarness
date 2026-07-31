@@ -1,4 +1,4 @@
-import type { AssistantMessageEvent, Model, ToolResultMessage } from "@loopiq/ai";
+import type { Model, ToolResultMessage } from "@loopiq/ai";
 
 import type { AgentMessage } from "./messages.ts";
 import type { ThinkingLevel } from "./options.ts";
@@ -31,6 +31,18 @@ export interface ThinkingLevelUpdateEvent {
 	previousLevel: ThinkingLevel;
 }
 
+/** Bounded assistant progress emitted without the Provider's growing partial message. */
+export type AssistantMessageUpdate =
+	| {
+			type: "text_start" | "text_end" | "thinking_start" | "thinking_end" | "toolcall_start" | "toolcall_end";
+			contentIndex: number;
+	  }
+	| {
+			type: "text_delta" | "thinking_delta" | "toolcall_delta";
+			contentIndex: number;
+			delta: string;
+	  };
+
 /**
  * Pure agent-run lifecycle events emitted by the agent loop (no generics, no
  * return-value semantics). This is the subset that flows through
@@ -45,8 +57,8 @@ export type AgentRunEvent =
 	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
 	// Message lifecycle - emitted for user, assistant, and toolResult messages
 	| { type: "message_start"; message: AgentMessage }
-	// Only emitted for assistant messages during streaming
-	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
+	// Only emitted for assistant messages during streaming; full content arrives at message_end
+	| { type: "message_update"; update: AssistantMessageUpdate }
 	| { type: "message_end"; message: AgentMessage }
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }

@@ -133,10 +133,10 @@ and metadata are not part of the Agent configuration or runtime API.
 ### Engine and Session lifecycle (`src/engine/`, `src/session/`)
 
 - `agent-engine.ts` — Session-stateless execution owner. It captures shared
-  model lookup/streaming, System Prompt policy, Skills and Prompt Templates,
-  the Session tool factory and duplicate-name validation, Provider request
-  policy, and Turn snapshot construction. It creates one short-lived `AgentRun`
-  per accepted request.
+  model lookup/streaming, the static System Prompt imported from
+  `packages/agent/src/prompts/system-prompt.ts`, Provider request policy, and Turn
+  snapshot construction. It creates one short-lived `AgentRun` per accepted
+  request.
 - `agent-run.ts` — one short-lived mutable driver per accepted request. It owns
   provider/tool loop state and communicates only through `AgentRunPort`.
   Its complete flow, ordering guarantees, scenarios, and design rationale are
@@ -151,12 +151,14 @@ and metadata are not part of the Agent configuration or runtime API.
 - `turn-state.ts` — immutable per-provider-Turn snapshot plus conversion to the
   request-local model context.
 - `session/agent-session.ts` — owns one loaded Session's incrementally maintained
-  in-memory messages, config, tool instances, steering queue, persistence, event
-  sequence, and one-active-run lifecycle. Explicit `steer(runId, ...)` and
+  in-memory messages, config, environment-bound default tool construction and
+  instances, Provider Session-resource cleanup, steering queue, persistence,
+  event sequence, and one-active-run lifecycle. Explicit `steer(runId, ...)` and
   `abort(runId)` reject stale run IDs.
 - `session/agent-session-manager.ts` — owns Session identity commands, durable
   discovery, loaded runtimes, single-flight open, model-switch application,
-  environments, writer leases, and shutdown.
+  the Agent-Home Session-store filesystem, Workspace environments, writer
+  leases, and shutdown.
 - `session/event-envelope.ts` — adds `sessionId`, `runtimeId`, optional `runId`, sequence,
   and timestamp to outward notifications.
 - `session/session-contracts.ts` — adapter-facing Session snapshots, commands, handles,
@@ -229,10 +231,12 @@ Agent Home and Workspace are separate. Agent-owned state uses this fixed layout:
 
 Each Session header stores one normalized absolute `workspaceDir` that points to
 the user's project outside Agent Home. Session creation and resume verify that
-the path exists and is a directory. `NodeExecutionEnv.cwd` is initialized from
-that path so existing tools resolve relative paths from the Workspace. Rich
-model-visible environment context, project instruction discovery, explicit
-Workspace roots, and filesystem escape prevention remain roadmap work.
+the path exists and is a directory. `AgentSessionManager` uses its separate
+Agent-Home filesystem adapter for every JSONL read and write. A per-Session
+`NodeExecutionEnv.cwd` is initialized from `workspaceDir` only for tools and
+other Workspace operations. Rich model-visible environment context, project
+instruction discovery, explicit Workspace roots, and filesystem escape
+prevention remain roadmap work.
 
 The lock directories used for Agent settings and credentials exist only during
 mutations. Model and thinking level are stored in explicit `session_config`
@@ -247,12 +251,12 @@ refreshes do not copy the complete history or scan storage.
 ### Base types (`src/base/`)
 
 - `messages.ts` — the `AgentMessage` alias for provider-compatible messages.
-- `resource.ts` — `AgentTool`, `Skill` (from SKILL.md), `PromptTemplate`,
-  `AgentResources`.
+- `resource.ts` — `AgentTool`, `Skill` (from SKILL.md), and `PromptTemplate`.
 - `options.ts` — safe persisted `ProviderRequestPolicy`, trusted in-memory
-  model/Session configuration, `AgentSystemPrompt`, and `ThinkingLevel`.
+  model/Session configuration, and `ThinkingLevel`.
 - `events.ts` — read-only Agent, Turn, message, tool, Provider-response, queue,
-  and configuration notification contracts.
+  and configuration notification contracts. Assistant progress uses bounded
+  Agent-owned deltas; complete messages appear only at lifecycle boundaries.
 - `types.ts` — `Result<T,E>`, and `SessionError` / `AgentRuntimeError`
   variants.
 
@@ -335,6 +339,11 @@ Discovery entry points reference the tool without duplicating docs:
 - `.claude/skills/devui-control/SKILL.md` is a relative symlink to that canonical
   manifest, allowing Claude Code and Codex to share one skill definition.
 
+The project-level `.agents/skills/code-review/` Skill captures accumulated
+design-review rules. Its first rule rejects speculative injection points that
+have no current caller-owned choice, multiple production implementations, or
+real external boundary.
+
 ## Data Flow
 
 1. An adapter calls `Agent.run(sessionId, input)`. The thin facade delegates to
@@ -347,11 +356,13 @@ Discovery entry points reference the tool without duplicating docs:
    whichever Provider request reads it.
 3. The internal `AgentSession` copies its current in-memory messages once for
    the accepted Run. The shared `AgentEngine` combines mutable Session
-   selection with its System Prompt, resources, tool policy, and current
-   Agent-wide Provider request policy to create a Turn snapshot, then starts a
-   run through a run-bound port and control channel.
-4. A fresh `AgentRun` streams through `@loopiq/ai`, executes tools, and drains
-   the Session-owned steering queue at safe points.
+   selection with its static System Prompt, tool policy, and current Agent-wide
+   Provider request policy to create a Turn snapshot, then starts a run through
+   a run-bound port and control channel.
+4. A fresh `AgentRun` streams through `@loopiq/ai`, retains growing Provider
+   partial messages only in its request-local context, emits bounded progress
+   deltas, executes tools, and drains the Session-owned steering queue at safe
+   points.
 5. Complete outputs and tool results pass through `AgentRunPort` to
    `AgentSession`, which appends them to `JsonlSessionStore` and only then adds
    them to its in-memory message context.

@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last audited: 2026-07-27
+Last audited: 2026-07-30
 
 This document defines the public `Agent` lifecycle and its internal split
 between `AgentEngine`, `AgentRun`, `AgentSession`, and
@@ -23,17 +23,18 @@ multi-Session ownership is documented in
 - `AgentSettings` owns the loaded Agent configuration, update validation,
   persistence ordering, Session defaults, and Provider request-policy view.
 - `AgentEngine` is an internal Session-stateless execution owner. It owns model
-  lookup/streaming, System Prompt policy, Skills and Prompt Templates, the tool
-  factory, Provider request policy, and Turn snapshot construction. It retains
-  no current Session or run.
+  lookup/streaming, the static System Prompt imported from
+  `packages/agent/src/prompts/system-prompt.ts`, Provider request policy, and Turn
+  snapshot construction. It retains no current Session or run.
 - Each `engine.run()` call creates one short-lived `AgentRun` containing mutable
   provider/tool-loop state for that request.
-- `AgentSession` owns one loaded Session's Store, environment, tool instances,
-  incrementally maintained message context, configuration, steering queue, event
-  sequence, and active-run control.
+- `AgentSession` owns one loaded Session's Store, environment, default tool
+  construction and instances, Provider Session-resource cleanup, incrementally
+  maintained message context, configuration, steering queue, event sequence, and
+  active-run control.
 - Internal `AgentSessionManager` owns Session-facing commands, discovery,
-  single-flight open, writer leases, create/open/list/close/delete/shutdown, and
-  environment lifecycle.
+  single-flight open, the Agent-Home Session-store filesystem, writer leases,
+  create/open/list/close/delete/shutdown, and Workspace environment lifecycle.
 
 One `AgentSession` admits one structural run at a time. Different Sessions can
 call the same engine concurrently.
@@ -46,9 +47,9 @@ does not inspect, validate, refresh, or reserve the selected Provider
 credential. `startRun()` is synchronous: it
 validates input, creates a
 unique `runId` and `AgentRunController`, changes the Session from `idle` to
-`running`, publishes the current handle, and only then starts asynchronous
-snapshot construction. The Agent method is asynchronous only because opening an
-unloaded Session may require I/O.
+`running`, publishes the current handle, and only then starts asynchronous run
+execution, whose first step captures the synchronous snapshot. The Agent method
+is asynchronous only because opening an unloaded Session may require I/O.
 
 Authentication is resolved later by `@loopiq/ai` when an actual Provider request
 starts. Missing, revoked, or concurrently removed credentials therefore do not
@@ -80,9 +81,8 @@ At Run start, `AgentSession` copies its in-memory message context once into
 
 - current model and thinking level;
 - the Engine-owned current Agent Provider request policy;
-- Engine-created Session tools;
-- the Engine-owned system-prompt string or callback, which may use Engine
-  resources while assembling the prompt;
+- Session-created tools;
+- the Engine-owned static System Prompt;
 - the durable Session ID used for provider affinity.
 
 The engine receives the initial messages and initial snapshot in
@@ -91,10 +91,6 @@ of the Run. At every successful Turn save point it asks the run-bound port for a
 fresh configuration snapshot without rebuilding or copying the full message
 history. Configuration changes therefore affect a later Provider request
 without mutating an in-flight request.
-
-System-prompt providers do not yet accept an `AbortSignal`. A run aborted during
-snapshot creation completes that callback, then enters the engine with an
-already-aborted run-control signal.
 
 ## Port Boundary
 
@@ -115,7 +111,8 @@ therefore cannot select Session state through shared mutable engine fields.
 
 The implemented ordering is:
 
-1. `message_start` and assistant `message_update` are emitted as progress.
+1. `message_start` and bounded assistant `message_update` deltas are emitted as
+   progress. Provider partial messages remain internal to `AgentRun`.
 2. A complete user, assistant, or tool-result message is appended to the JSONL
    Store and then added to the loaded in-memory context.
 3. Only after append succeeds is `message_end` emitted.
@@ -133,7 +130,9 @@ therefore observe committed transcript state.
 There is no hook registration or return-valued interception channel in the
 current runtime. A future plugin system must introduce its registration API and
 execution semantics together instead of leaving unreachable hook contracts in
-the core loop.
+the core loop. Assistant `message_update` notifications contain only content
+kind, content index, and delta where applicable; consumers receive the complete
+assistant message from `message_end`.
 
 ## Steering and Abort
 

@@ -1,4 +1,4 @@
-import type { Model, UserMessage } from "@loopiq/ai";
+import { cleanupSessionResources, type Model, type UserMessage } from "@loopiq/ai";
 import type { ExecutionEnv } from "../base/env.ts";
 import type { AgentMessage } from "../base/messages.ts";
 import type { ModelReference, SessionConfiguration, ThinkingLevel } from "../base/options.ts";
@@ -11,6 +11,7 @@ import type { AgentRunOutcome } from "../engine/agent-run-outcome.ts";
 import type { AgentRunPort } from "../engine/agent-run-port.ts";
 import { createUserMessage } from "../engine/message-factory.ts";
 import type { TurnState } from "../engine/turn-state.ts";
+import { createDefaultTools } from "../tools/index.ts";
 import type { AgentEventEnvelope, AgentEventListener, RunSettledEvent } from "./event-envelope.ts";
 import type {
 	AbortResult,
@@ -83,7 +84,7 @@ export class AgentSession {
 	static async load(options: AgentSessionLoadOptions): Promise<AgentSession> {
 		const restored = options.store.restore();
 		const persisted = options.newSession ? undefined : restored.configuration;
-		const tools = await options.engine.createSessionTools(options.env);
+		const tools = createDefaultTools(options.env);
 		const modelReference = options.newSession?.model ?? persisted?.model ?? options.defaults.model;
 		const model = options.engine.resolveModel(modelReference);
 		const config: SessionConfiguration = persisted ?? {
@@ -191,7 +192,7 @@ export class AgentSession {
 			errors.push(toError(error));
 		}
 		try {
-			await this.engine.cleanupSession(this.id);
+			cleanupSessionResources(this.id);
 		} catch (error) {
 			errors.push(toError(error));
 		}
@@ -216,7 +217,7 @@ export class AgentSession {
 		let outcome: AgentRunOutcome;
 		try {
 			const initialMessages = this.messages.slice();
-			const initialSnapshot = await this.createTurnSnapshot();
+			const initialSnapshot = this.createTurnSnapshot();
 			outcome = await this.engine.run(
 				{ sessionId: this.id, ...input, initialMessages, initialSnapshot, control },
 				this.createRunPort(runId),
@@ -274,10 +275,8 @@ export class AgentSession {
 		};
 	}
 
-	private createTurnSnapshot(): Promise<TurnState> {
+	private createTurnSnapshot(): TurnState {
 		return this.engine.createTurnSnapshot({
-			sessionId: this.id,
-			env: this.env,
 			model: this.model,
 			thinkingLevel: this.thinkingLevel,
 			tools: this.tools,

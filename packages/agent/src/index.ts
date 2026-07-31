@@ -11,6 +11,7 @@ export type {
 	SteerOptions,
 	UpdateSessionOptions,
 } from "./agent.ts";
+export type { AssistantMessageUpdate } from "./base/events.ts";
 export type {
 	ModelReference,
 	ProviderCacheRetention,

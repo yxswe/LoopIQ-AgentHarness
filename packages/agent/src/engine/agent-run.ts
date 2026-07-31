@@ -173,7 +173,7 @@ export class AgentRun {
 
 	private async refreshSnapshot(): Promise<void> {
 		await this.port.flushPendingSessionState();
-		this.activeSnapshot = await this.port.createTurnSnapshot();
+		this.activeSnapshot = this.port.createTurnSnapshot();
 	}
 
 	private async streamAssistant(
@@ -219,21 +219,29 @@ export class AgentRun {
 						await this.handleAgentEvent({ type: "message_start", message: { ...partialMessage } });
 						break;
 					case "text_start":
-					case "text_delta":
 					case "text_end":
 					case "thinking_start":
-					case "thinking_delta":
 					case "thinking_end":
 					case "toolcall_start":
-					case "toolcall_delta":
 					case "toolcall_end":
 						if (partialMessage) {
 							partialMessage = event.partial;
 							context.messages[context.messages.length - 1] = partialMessage;
 							await this.handleAgentEvent({
 								type: "message_update",
-								assistantMessageEvent: event,
-								message: { ...partialMessage },
+								update: { type: event.type, contentIndex: event.contentIndex },
+							});
+						}
+						break;
+					case "text_delta":
+					case "thinking_delta":
+					case "toolcall_delta":
+						if (partialMessage) {
+							partialMessage = event.partial;
+							context.messages[context.messages.length - 1] = partialMessage;
+							await this.handleAgentEvent({
+								type: "message_update",
+								update: { type: event.type, contentIndex: event.contentIndex, delta: event.delta },
 							});
 						}
 						break;

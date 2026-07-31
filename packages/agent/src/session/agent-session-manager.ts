@@ -88,7 +88,7 @@ export class AgentSessionManager {
 		const lease = await acquireSessionStoreLease(join(sessionDir, "runtime.lock"));
 		const env = new NodeExecutionEnv({ cwd: workspaceDir });
 		try {
-			const store = await JsonlSessionStore.create(env, join(sessionDir, "session.jsonl"), {
+			const store = await JsonlSessionStore.create(this.storeFileSystem, join(sessionDir, "session.jsonl"), {
 				workspaceDir,
 				sessionId,
 			});
@@ -212,7 +212,7 @@ export class AgentSessionManager {
 			}
 			const workspaceDir = await this.resolveWorkspaceDir(metadata.workspaceDir);
 			env = new NodeExecutionEnv({ cwd: workspaceDir });
-			const store = await JsonlSessionStore.open(env, sessionPath);
+			const store = await JsonlSessionStore.open(this.storeFileSystem, sessionPath);
 			return await this.loadSession(env, store, lease);
 		} catch (error) {
 			await env?.cleanup().catch(() => undefined);
