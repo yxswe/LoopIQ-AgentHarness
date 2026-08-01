@@ -326,33 +326,7 @@ requests in that Run use the original snapshot while the next Run uses the new
 configuration. Cover steering, tool continuation, abort, configuration
 persistence failure, and explicitly dynamic request-state behavior.
 
-## 4. Auto-trigger context management in the loop
-
-**Why**: Context compaction is not implemented. The previous standalone helpers,
-unused JSONL entry variants, and unobservable hook/event declarations were
-removed because no runtime path could reach them. Long Sessions will eventually
-overflow a Provider context window until one cohesive design is implemented.
-
-**Scope**:
-- Design the context threshold, cut-point, summary, persistence, and in-memory
-  replacement rules together rather than restoring the deleted detached
-  helpers.
-- Invoke compaction at an explicit Run save boundary once usage is known.
-- Define one current JSONL entry shape only when the runtime can both write and
-  restore it.
-- Add hook and notification contracts only when Agent exposes a registration
-  path and AgentRun actually emits them.
-- Handle edge cases: compaction failure, abort during compaction, no valid cut
-  point, and back-to-back compactions.
-
-**Observability**: emit a defined compaction lifecycle with before/after token
-counts, cut point, and summary size; surface the transition so DevUI can show
-it.
-
-**Tests**: threshold triggering in-loop, correct cut-point selection, summary
-appended and context rebuilt, hook override respected, and abort-safety.
-
-## 5. CLI & headless entrypoint
+## 4. CLI & headless entrypoint
 
 **Why**: The Agent needs consistent behavior across DevUI and headless use, with
 reliable scripting, automation, and CI behavior.
@@ -370,11 +344,11 @@ consume the same event stream the DevUI sees; clear exit codes for failures.
 **Tests**: end-to-end CLI tests (spawn process, feed prompt, assert output and
 exit code), plus tests for flag parsing and headless session lifecycle.
 
-## 6. Kernel test coverage
+## 5. Kernel test coverage
 
-**Why**: the built-in tools and JSONL Session storage now have unit tests, but
-the central turn lifecycle, queueing, compaction integration, event contracts,
-and skill loading remain largely uncovered. These paths coordinate mutable
+**Why**: the built-in tools, JSONL Session storage, and context compaction now
+have unit tests, but the central turn lifecycle, queueing, event contracts, and
+skill loading remain largely uncovered. These paths coordinate mutable
 state and cancellation, so regressions can cross subsystem boundaries even when
 individual tools and storage primitives pass.
 
@@ -385,8 +359,6 @@ individual tools and storage primitives pass.
   pending configuration flush ordering, storage failures, and concurrent append
   behavior. JSONL format validation and round-trips already have baseline
   coverage.
-- Compaction: threshold triggering, cut-point semantics, summary persistence,
-  and in-memory context replacement after the feature is designed.
 - Queues and skills loading (SKILL.md discovery, frontmatter, ignore files).
 - Introduce shared test fixtures, a fake `ExecutionEnv`, and a faux model
   provider for deterministic cross-subsystem tests.
@@ -394,11 +366,11 @@ individual tools and storage primitives pass.
 **Observability**: tests should assert on emitted events, making the event
 contract itself part of the spec.
 
-## 7. Stateless engine serving multiple sessions in parallel
+## 6. Stateless engine serving multiple sessions in parallel
 
 **Why**: The Agent must preserve isolation while sharing one engine across
 Sessions. The stateless engine and explicit Session state form the foundation
-for sub-agents in item 8.
+for sub-agents in item 7.
 
 **Scope**:
 - Separate the stateless "engine" (turn loop, tool dispatch, provider calls,
@@ -417,7 +389,7 @@ sessions remain distinguishable in logs/events.
 **Tests**: concurrency tests (interleaved turns across sessions with no state
 bleed), isolation/abort per session, and load/stress tests for the engine.
 
-## 8. Sub-agent design
+## 7. Sub-agent design
 
 **Why**: No sub-agent / delegation mechanism exists (`subagent` grep = 0). Real
 Agents spawn isolated child Agents for parallel or scoped tasks.
@@ -427,7 +399,7 @@ Agents spawn isolated child Agents for parallel or scoped tasks.
   restricted tool set, own budget), how results return to the parent, and how
   cancellation propagates.
 - Decide isolation model: separate session branch vs separate engine instance
-  (build on the stateless multi-session engine from item 7).
+  (build on the stateless multi-session engine from item 6).
 - Expose sub-agent invocation as a tool and/or an Agent primitive.
 
 **Observability**: parent↔child event correlation (trace/span IDs), aggregate
@@ -436,7 +408,7 @@ child token/cost/latency up to the parent, surface child lifecycle on the bus.
 **Tests**: nested-agent execution, result propagation, abort propagation,
 budget enforcement, and event correlation.
 
-## 9. Hook optimization → plugin mechanism
+## 8. Hook optimization → plugin mechanism
 
 **Why**: The runtime deliberately has no hook registration surface or plugin
 loading. Goal: a real plugin
@@ -458,7 +430,7 @@ and which plugin handled each event; make plugin errors non-fatal and visible.
 **Tests**: manifest parsing/compat for both marketplace formats, hook
 ordering/short-circuit semantics, plugin failure isolation, and sandboxing.
 
-## 10. Multimodal input: text and images
+## 9. Multimodal input: text and images
 
 **Current baseline**: `AgentInput` requires text and optionally accepts
 `ImageContent[]`; `createUserMessage()` can place text and images in one user
@@ -498,7 +470,7 @@ behavior such as rejecting a valid image-only prompt before a Run is accepted.
   HTTP upload and request-size limits, browser preview/removal, and
   machine-readable input/output shapes.
 - Ensure image-bearing steering, abort, Session close/reopen, replay, context
-  accounting, and future compaction preserve valid model-visible content.
+  accounting, and compaction preserve valid model-visible content.
 
 **Observability**: report content kinds, image count, MIME types, encoded and
 decoded sizes, normalization decisions, capability rejection, and persistence
@@ -509,7 +481,7 @@ ordering, supported and unsupported MIME types, corrupt encodings, all size
 boundaries, unsupported models, steering and abort, JSONL close/reopen, tool
 image results, CLI/HTTP/DevUI submission, and redacted structured events.
 
-## 11. Run usage and reliable Session event delivery
+## 10. Run usage and reliable Session event delivery
 
 **Current baseline**: Provider usage is available on individual assistant
 messages, but neither `RunResult` nor `run_settled` exposes aggregate usage for

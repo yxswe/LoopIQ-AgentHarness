@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last audited: 2026-07-30
+Last audited: 2026-08-01
 
 This document defines current multi-Session ownership, concurrency, hosting, and
 adapter contracts. `Agent` is the sole application entry; concrete hosts,
@@ -53,7 +53,7 @@ Different Sessions may use the same `workspaceDir` and still run concurrently.
 | Persisted Agent settings | `FileAgentSettingsStore` (`agent.json`) |
 | Persisted provider credentials | `FileCredentialStore` (`credentials.json`) |
 | Online credential-validation cache | `ModelRuntime` memory |
-| Model lookup/streaming and System Prompt | `AgentEngine` |
+| Model lookup/streaming, System Prompt, and shared stateless context manager | `AgentEngine` |
 | Loaded model-visible message context | `AgentSession` memory |
 | Stable current-Turn snapshot | One `AgentRun` |
 | Provider stream and partial assistant message | One `AgentRun` |
@@ -113,9 +113,9 @@ objects.
 
 `AgentEngine` is Session-stateless. It retains shared application execution
 assets: model lookup/streaming, the static System Prompt imported from
-`packages/agent/src/prompts/system-prompt.ts`, and Provider request policy. It
-must not retain a current Session, run, message context, steering queue, Store,
-or abort controller.
+`packages/agent/src/prompts/system-prompt.ts`, Provider request policy, and one
+stateless `ContextManager`. It must not retain a current Session, run, message
+context, steering queue, Store, or abort controller.
 
 ```ts
 export class AgentEngine {
@@ -140,6 +140,11 @@ The Session supplies narrow capabilities instead of exposing itself:
 export interface AgentRunPort {
   drainSteering(): Promise<AgentMessage[]>;
   commitMessage(message: AgentMessage): Promise<void>;
+  commitCompaction(input: {
+    sourceMessageCount: number;
+    compactedMessageCount: number;
+    summary: UserMessage;
+  }): Promise<void>;
   flushPendingSessionState(): Promise<boolean>;
   createTurnSnapshot(): TurnState;
   emit(event: AgentEngineEvent): Promise<void>;
@@ -149,8 +154,10 @@ export interface AgentRunPort {
 The steering drain owns update notification and rollback behavior.
 `commitMessage()` appends through `JsonlSessionStore`, then adds the message to
 the loaded context, and only then permits `message_end`. Save-point ordering is
-owned by the run. Session state remains Session-owned, while the Engine owns
-snapshot assembly.
+owned by the run. `commitCompaction()` verifies Run/Session context agreement,
+appends the checkpoint, and replaces the loaded Session context before the Run
+replaces its local copy. Session state remains Session-owned, while the Engine
+owns snapshot assembly and context planning.
 
 The concrete port closure is permanently bound to one run ID and validates that
 identity before Session access.
@@ -194,12 +201,14 @@ Run-to-Session information is incremental:
 
 1. bounded progress deltas stream through the run-bound port while growing
    Provider partial messages remain inside the Run;
-2. complete messages are committed immediately;
-3. `message_end` follows successful commit;
-4. turn boundaries flush pending configuration and refresh Engine-owned
+2. each Provider request first performs blocking context maintenance when the
+   active model threshold is reached;
+3. complete messages are committed immediately;
+4. `message_end` follows successful commit;
+5. turn boundaries flush pending configuration and refresh Engine-owned
    execution state without copying the Run's complete message context;
-5. `AgentRunOutcome` summarizes already-committed work;
-6. `AgentSession` emits `run_settled` and resolves the handle.
+6. `AgentRunOutcome` summarizes already-committed work;
+7. `AgentSession` emits `run_settled` and resolves the handle.
 
 The final outcome is not a transaction that writes all run messages at once.
 
@@ -361,7 +370,6 @@ calls `Agent.abort(sessionId, runId)` and waits for settlement.
 
 ## Current Limitations
 
-- Context compaction is not implemented.
 - Durable steering recovery is not implemented.
 - In-flight provider and tool work cannot resume after process crash.
 - Event replay is not implemented.
@@ -382,4 +390,5 @@ synchronous busy reservation, stale-command rejection, run-correlated
 envelopes, inference-only steering, persisted config restore, single-flight
 open, writer-lease contention, and running close/delete rejection. Any
 ownership or lifecycle change must extend these tests before changing this
-contract.
+contract. Context coverage includes durable replacement, replay, persistence
+failure, and abort safety.

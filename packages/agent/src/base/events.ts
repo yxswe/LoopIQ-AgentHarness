@@ -1,7 +1,33 @@
 import type { Model, ToolResultMessage } from "@loopiq/ai";
 
 import type { AgentMessage } from "./messages.ts";
-import type { ThinkingLevel } from "./options.ts";
+import type { ModelReference, ThinkingLevel } from "./options.ts";
+
+export interface ContextCompactionEventBase {
+	model: ModelReference;
+	contextWindow: number;
+	triggerTokens: number;
+	targetTokens: number;
+	beforeTokens: number;
+	sourceMessageCount: number;
+}
+
+export interface ContextCompactionStartedEvent extends ContextCompactionEventBase {
+	type: "context_compaction_started";
+}
+
+export interface ContextCompactionCompletedEvent extends ContextCompactionEventBase {
+	type: "context_compaction_completed";
+	afterTokens: number;
+	compactedMessageCount: number;
+	retainedMessageCount: number;
+	summaryTokens: number;
+}
+
+export interface ContextCompactionFailedEvent extends ContextCompactionEventBase {
+	type: "context_compaction_failed";
+	error: { code: string; message: string };
+}
 
 export interface SteeringQueueUpdateEvent {
 	type: "steering_queue_update";
@@ -60,6 +86,10 @@ export type AgentRunEvent =
 	// Only emitted for assistant messages during streaming; full content arrives at message_end
 	| { type: "message_update"; update: AssistantMessageUpdate }
 	| { type: "message_end"; message: AgentMessage }
+	// Context maintenance lifecycle
+	| ContextCompactionStartedEvent
+	| ContextCompactionCompletedEvent
+	| ContextCompactionFailedEvent
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }

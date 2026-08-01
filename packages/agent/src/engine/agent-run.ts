@@ -11,6 +11,12 @@ import type { AgentRunEvent } from "../base/events.ts";
 import type { AgentMessage } from "../base/messages.ts";
 import type { AgentContext } from "../base/options.ts";
 import { AgentRuntimeError, toError } from "../base/types.ts";
+import {
+	ContextCompactionError,
+	type ContextCompactionPreparation,
+	type ContextCompactionResult,
+	type ContextManager,
+} from "../context/context-manager.ts";
 import type { AgentRunControlView, InferenceInterruptReason } from "./agent-run-control.ts";
 import type { AgentRunOutcome } from "./agent-run-outcome.ts";
 import type { AgentRunPort } from "./agent-run-port.ts";
@@ -33,11 +39,18 @@ export interface AgentRunInput extends AgentUserInput {
 export class AgentRun {
 	private activeSnapshot: TurnState;
 	private readonly models: Pick<Models, "streamSimple">;
+	private readonly contextManager: ContextManager;
 	private readonly input: AgentRunInput;
 	private readonly port: AgentRunPort;
 
-	constructor(models: Pick<Models, "streamSimple">, input: AgentRunInput, port: AgentRunPort) {
+	constructor(
+		models: Pick<Models, "streamSimple">,
+		contextManager: ContextManager,
+		input: AgentRunInput,
+		port: AgentRunPort,
+	) {
 		this.models = models;
+		this.contextManager = contextManager;
 		this.input = input;
 		this.port = port;
 		this.activeSnapshot = input.initialSnapshot;
@@ -121,6 +134,7 @@ export class AgentRun {
 				pendingMessages = [];
 			}
 
+			await this.compactContext(currentContext, model);
 			const streamed = await this.streamAssistant(currentContext, model, reasoning);
 			const message = streamed.message;
 			newMessages.push(message);
@@ -174,6 +188,76 @@ export class AgentRun {
 	private async refreshSnapshot(): Promise<void> {
 		await this.port.flushPendingSessionState();
 		this.activeSnapshot = this.port.createTurnSnapshot();
+	}
+
+	private async compactContext(context: AgentContext, model: Model<any>): Promise<void> {
+		let preparation: ContextCompactionPreparation;
+		try {
+			const prepared = this.contextManager.prepare(context, model);
+			if (!prepared) return;
+			preparation = prepared;
+		} catch (error) {
+			if (error instanceof ContextCompactionError && error.budget.beforeTokens >= error.budget.triggerTokens) {
+				const event = {
+					model: { providerId: model.provider, modelId: model.id },
+					...error.budget,
+					sourceMessageCount: context.messages.length,
+				};
+				await this.port.emit({ type: "context_compaction_started", ...event });
+				await this.port.emit({
+					type: "context_compaction_failed",
+					...event,
+					error: { code: error.code, message: error.message },
+				});
+			}
+			throw error;
+		}
+
+		const event = {
+			model: { providerId: model.provider, modelId: model.id },
+			contextWindow: preparation.contextWindow,
+			triggerTokens: preparation.triggerTokens,
+			targetTokens: preparation.targetTokens,
+			beforeTokens: preparation.beforeTokens,
+			sourceMessageCount: preparation.sourceMessageCount,
+		};
+		await this.port.emit({ type: "context_compaction_started", ...event });
+		let result: ContextCompactionResult;
+		try {
+			result = await this.contextManager.compact(preparation, {
+				sessionId: this.input.sessionId,
+				model,
+				providerRequestPolicy: this.activeSnapshot.providerRequestPolicy,
+				systemPrompt: context.systemPrompt,
+				tools: context.tools ?? [],
+				signal: this.input.control.runSignal,
+			});
+			await this.port.commitCompaction({
+				sourceMessageCount: result.sourceMessageCount,
+				compactedMessageCount: result.compactedMessageCount,
+				summary: result.summary,
+			});
+			context.messages.splice(0, context.messages.length, ...result.messages);
+		} catch (error) {
+			const failure = toError(error);
+			await this.port.emit({
+				type: "context_compaction_failed",
+				...event,
+				error: {
+					code: error instanceof ContextCompactionError ? error.code : "commit_failed",
+					message: failure.message,
+				},
+			});
+			throw error;
+		}
+		await this.port.emit({
+			type: "context_compaction_completed",
+			...event,
+			afterTokens: result.afterTokens,
+			compactedMessageCount: result.compactedMessageCount,
+			retainedMessageCount: result.retainedMessages.length,
+			summaryTokens: result.summaryTokens,
+		});
 	}
 
 	private async streamAssistant(

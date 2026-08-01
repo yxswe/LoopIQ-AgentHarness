@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import type { UserMessage } from "@loopiq/ai";
 import type { FileError, FileSystem } from "../../base/env.ts";
 import type { AgentMessage } from "../../base/messages.ts";
 import type { SessionConfiguration } from "../../base/options.ts";
@@ -22,9 +23,18 @@ type SessionConfigurationEntry = SessionEntryBase & {
 	configuration: SessionConfiguration;
 };
 
-type SessionEntry = MessageEntry | SessionConfigurationEntry;
+type ContextCompactionEntry = SessionEntryBase & {
+	type: "context_compaction";
+	compactedMessageCount: number;
+	summary: UserMessage;
+};
 
-type SessionEntryInput = Omit<MessageEntry, "id" | "timestamp"> | Omit<SessionConfigurationEntry, "id" | "timestamp">;
+type SessionEntry = MessageEntry | SessionConfigurationEntry | ContextCompactionEntry;
+
+type SessionEntryInput =
+	| Omit<MessageEntry, "id" | "timestamp">
+	| Omit<SessionConfigurationEntry, "id" | "timestamp">
+	| Omit<ContextCompactionEntry, "id" | "timestamp">;
 
 type SessionHeader = {
 	type: "session";
@@ -105,6 +115,17 @@ function isSessionConfiguration(value: unknown): value is SessionConfiguration {
 	);
 }
 
+function isUserMessage(value: unknown): value is UserMessage {
+	if (!isRecord(value) || value.role !== "user" || typeof value.timestamp !== "number") return false;
+	if (typeof value.content === "string") return true;
+	if (!Array.isArray(value.content)) return false;
+	return value.content.every((item) => {
+		if (!isRecord(item)) return false;
+		if (item.type === "text") return typeof item.text === "string";
+		return item.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string";
+	});
+}
+
 function validateEntry(parsed: unknown, filePath: string, lineNumber: number): SessionEntry {
 	if (!isRecord(parsed)) throw invalidEntry(filePath, lineNumber, "is not a valid session entry");
 	if (typeof parsed.id !== "string" || !parsed.id) throw invalidEntry(filePath, lineNumber, "is missing entry id");
@@ -120,6 +141,14 @@ function validateEntry(parsed: unknown, filePath: string, lineNumber: number): S
 		case "session_config":
 			if (!isSessionConfiguration(parsed.configuration)) {
 				throw invalidEntry(filePath, lineNumber, "has an invalid Session configuration");
+			}
+			break;
+		case "context_compaction":
+			if (!Number.isInteger(parsed.compactedMessageCount) || (parsed.compactedMessageCount as number) <= 0) {
+				throw invalidEntry(filePath, lineNumber, "has an invalid compactedMessageCount");
+			}
+			if (!isUserMessage(parsed.summary)) {
+				throw invalidEntry(filePath, lineNumber, "has an invalid context summary");
 			}
 			break;
 		default:
@@ -168,6 +197,7 @@ export class JsonlSessionStore {
 	private readonly fs: SessionStoreFileSystem;
 	private readonly entries: SessionEntry[];
 	private readonly byId: Map<string, SessionEntry>;
+	private visibleMessageCount = 0;
 	private appendQueue: Promise<void> = Promise.resolve();
 
 	private constructor(fs: SessionStoreFileSystem, filePath: string, header: SessionHeader, entries: SessionEntry[]) {
@@ -175,6 +205,16 @@ export class JsonlSessionStore {
 		this.metadata = metadataFromHeader(header, filePath);
 		this.entries = entries;
 		this.byId = new Map(entries.map((entry) => [entry.id, entry]));
+		for (let index = 0; index < entries.length; index++) {
+			const entry = entries[index]!;
+			if (entry.type === "message") this.visibleMessageCount++;
+			else if (entry.type === "context_compaction") {
+				if (entry.compactedMessageCount > this.visibleMessageCount) {
+					throw invalidEntry(filePath, index + 2, "compacts more messages than are visible");
+				}
+				this.visibleMessageCount = this.visibleMessageCount - entry.compactedMessageCount + 1;
+			}
+		}
 	}
 
 	static async readMetadata(fs: SessionStoreFileSystem, filePath: string): Promise<SessionStoreMetadata> {
@@ -213,11 +253,13 @@ export class JsonlSessionStore {
 		let configuration: SessionConfiguration | undefined;
 		for (const entry of this.entries) {
 			if (entry.type === "message") messages.push(entry.message);
-			else {
+			else if (entry.type === "session_config") {
 				configuration = {
 					model: { ...entry.configuration.model },
 					thinkingLevel: entry.configuration.thinkingLevel,
 				};
+			} else {
+				messages.splice(0, entry.compactedMessageCount, entry.summary);
 			}
 		}
 		return { messages, configuration };
@@ -237,6 +279,14 @@ export class JsonlSessionStore {
 		} satisfies Omit<SessionConfigurationEntry, "id" | "timestamp">);
 	}
 
+	appendCompaction(compactedMessageCount: number, summary: UserMessage): Promise<void> {
+		return this.appendEntry({
+			type: "context_compaction",
+			compactedMessageCount,
+			summary,
+		} satisfies Omit<ContextCompactionEntry, "id" | "timestamp">);
+	}
+
 	private appendEntry(entry: SessionEntryInput): Promise<void> {
 		const operation = this.appendQueue.then(async () => {
 			const complete = {
@@ -245,12 +295,19 @@ export class JsonlSessionStore {
 				timestamp: new Date().toISOString(),
 			} as SessionEntry;
 			validateEntry(complete, this.metadata.path, this.entries.length + 2);
+			if (complete.type === "context_compaction" && complete.compactedMessageCount > this.visibleMessageCount) {
+				throw invalidEntry(this.metadata.path, this.entries.length + 2, "compacts more messages than are visible");
+			}
 			getFileResultOrThrow(
 				await this.fs.appendFile(this.metadata.path, `${JSON.stringify(complete)}\n`),
 				`Failed to append session entry ${complete.id}`,
 			);
 			this.entries.push(complete);
 			this.byId.set(complete.id, complete);
+			if (complete.type === "message") this.visibleMessageCount++;
+			else if (complete.type === "context_compaction") {
+				this.visibleMessageCount = this.visibleMessageCount - complete.compactedMessageCount + 1;
+			}
 		});
 		this.appendQueue = operation.then(
 			() => undefined,

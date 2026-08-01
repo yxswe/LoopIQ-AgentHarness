@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last audited: 2026-07-30
+Last audited: 2026-08-01
 
 This document explains the implemented `AgentRun` behavior for readers with no
 prior knowledge of LoopIQ Agent. It focuses on the execution kernel: how
@@ -48,14 +48,14 @@ Application adapter (CLI or server)
 - `Agent` is the sole adapter-facing entry and returns only snapshots, handles,
   results, and events.
 - `AgentEngine` owns shared model lookup/streaming, the static System Prompt,
-  Provider policy, and Turn snapshot assembly. It has no current Session or
-  current run.
+  Provider policy, Turn snapshot assembly, and one stateless `ContextManager`.
+  It has no current Session or current run.
 - `AgentSession` owns durable history, loaded in-memory messages, configuration,
   tool instances, the steering queue, event subscribers, persistence, and the
   one-active-run lifecycle.
 - `AgentRun` is short-lived. It owns its incrementally maintained request-local
-  context, current configuration snapshot, model/tool loop, and messages
-  produced by one accepted request.
+  context, current configuration snapshot, pre-request compaction invocation,
+  model/tool loop, and messages produced by one accepted request.
 - `AgentRunPort` is the narrow boundary through which the run asks its Session
   to consume steering, commit messages, flush Session state, create snapshots,
   and dispatch notifications.
@@ -113,6 +113,7 @@ The port provides Session-owned capabilities without exposing the entire
 | --- | --- | --- |
 | Queue consumption | `drainSteering` | Queue storage, update events, and drain rollback remain Session-owned |
 | Durable transcript | `commitMessage` | The engine must not depend on JSONL or another storage backend |
+| Durable context replacement | `commitCompaction` | The Session validates context agreement, persists the checkpoint, then replaces its loaded history |
 | Write boundary | `flushPendingSessionState` | The Session owns its pending configuration snapshot |
 | Snapshot refresh | `createTurnSnapshot` | The Engine combines Session state with shared execution assets |
 | Notifications | `emit` | Event subscribers and envelope sequencing are Session-scoped |
@@ -193,7 +194,28 @@ Steering selected for this Turn is emitted and committed before the Provider
 request. It is added to both model context and the Run's aggregate message
 list.
 
-#### D2. Prepare the provider request
+#### D2. Check and compact context
+
+Immediately before each normal Provider request, `AgentRun` asks the shared
+`ContextManager` to inspect the complete imminent context. When estimated usage
+is at least 90% of `model.contextWindow`, the run blocks while the manager
+selects a legal cut point and generates a bounded handoff summary with the
+active model. The summary request uses no tools or reasoning.
+
+Successful installation is ordered as follows:
+
+```text
+append context_compaction
+  -> replace AgentSession context
+  -> replace AgentRun context
+  -> emit context_compaction_completed
+```
+
+A failure or whole-run abort installs no replacement and the normal Provider
+request does not start. Full strategy and persistence rules are specified in
+[`context-management.md`](./context-management.md).
+
+#### D3. Prepare the provider request
 
 The run derives effective request options from the snapshot's Provider request
 policy. The current request-local messages are passed directly with the snapshot
@@ -211,7 +233,7 @@ The run then opens a new inference scope and calls `Models.streamSimple()` with:
 When an HTTP response is available, `after_provider_response` is emitted with
 status and copied headers.
 
-#### D3. Stream the assistant message
+#### D4. Stream the assistant message
 
 Provider events are translated into the public message lifecycle:
 
@@ -232,7 +254,7 @@ instead of repeatedly serializing the accumulated message.
 The inference scope is always closed in a `finally` block, preventing a later
 steering command from targeting an already-finished provider request.
 
-#### D4. Handle terminal provider states
+#### D5. Handle terminal provider states
 
 If the final assistant message has `stopReason: "error"` or
 `stopReason: "aborted"`, the run emits `turn_end`, reaches a save point, emits
@@ -242,7 +264,7 @@ There is one exception: an aborted assistant message caused specifically by an
 interrupting steering command is not terminal for the run. That scenario is
 handled in [Steering](#8-steering).
 
-#### D5. Execute requested tools
+#### D6. Execute requested tools
 
 If the assistant message contains tool calls, the run delegates the batch to
 `executeToolCalls()`.
@@ -268,7 +290,7 @@ The engine normally starts another provider turn after tool results. It stops
 that continuation when every finalized result in the batch has
 `terminate: true`.
 
-#### D6. Close the turn and refresh state
+#### D7. Close the turn and refresh state
 
 After the assistant response and any tools, the run:
 
@@ -341,6 +363,7 @@ while the previous response requires tool continuation
   emit turn_start, except for the already-open first turn
   commit pending messages
 
+  compact the imminent context when its model threshold is reached
   assistant = stream one provider response
 
   if provider inference was interrupted for steering:
@@ -434,6 +457,13 @@ flush Session state before the next snapshot or agent_end
 This ordering ensures that buffered runtime-configuration mutations reach a
 stable boundary even if a `turn_end` observer fails.
 
+Context checkpoints use a separate durable ordering. `AgentSession` first
+verifies that its loaded message count matches the Run's source count, appends
+the `context_compaction` entry, and replaces its loaded array. Only after that
+port call succeeds does `AgentRun` replace its request-local array and emit the
+completed notification. Replay applies the same prefix replacement in physical
+JSONL order.
+
 The final `AgentRunOutcome` summarizes work that has already been committed
 incrementally. It is not a transaction that writes the whole run only at the
 end. After a process crash, committed JSONL entries remain, but an in-flight
@@ -514,6 +544,13 @@ never continues merely because a steering message was also present.
 Missing tools, invalid arguments, and thrown tool errors become error
 tool-result messages. They are durable inputs to the next model turn rather
 than immediate run failures.
+
+### Context compaction failure
+
+Unsafe history, summary failure, invalid summary output, persistence failure,
+or whole-run abort emits `context_compaction_failed`, installs no checkpoint,
+and prevents the pending normal Provider request. The standard Run failure path
+then reports the terminal failure.
 
 ### Event, persistence, or unexpected loop failure
 
@@ -634,7 +671,6 @@ codes without parsing assistant text.
 
 ## 15. Current Limitations
 
-- Context compaction is not implemented.
 - Provider retry is delegated to Provider request options. The run does not own
   a separate retry phase.
 - In-flight provider streams and tool calls cannot be resumed after a process
@@ -650,6 +686,8 @@ The primary implementation files are:
 - `packages/agent/src/engine/agent-engine.ts` — shared concrete engine;
 - `packages/agent/src/engine/agent-run.ts` — run algorithm and event
   ordering;
+- `packages/agent/src/context/context-manager.ts` — compaction threshold,
+  planning, summary generation, and replacement construction;
 - `packages/agent/src/engine/agent-run-port.ts` — Session capability
   boundary;
 - `packages/agent/src/engine/agent-run-control.ts` — whole-run and
