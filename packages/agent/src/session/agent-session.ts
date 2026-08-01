@@ -263,6 +263,20 @@ export class AgentSession {
 				await this.store.appendMessage(message);
 				this.messages.push(message);
 			},
+			commitCompaction: async ({ sourceMessageCount, compactedMessageCount, summary }) => {
+				this.assertCurrentRun(runId);
+				if (this.messages.length !== sourceMessageCount) {
+					throw new AgentRuntimeError(
+						"invalid_state",
+						"AgentRun and AgentSession contexts diverged before compaction",
+					);
+				}
+				if (compactedMessageCount <= 0 || compactedMessageCount > this.messages.length) {
+					throw new AgentRuntimeError("invalid_state", "Context compaction has an invalid message range");
+				}
+				await this.store.appendCompaction(compactedMessageCount, summary);
+				this.messages.splice(0, compactedMessageCount, summary);
+			},
 			flushPendingSessionState: () => this.flushPendingSessionState(),
 			createTurnSnapshot: () => {
 				this.assertCurrentRun(runId);

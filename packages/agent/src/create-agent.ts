@@ -85,9 +85,10 @@ async function createAgentInHome(options: AgentConstructionOptions): Promise<Age
 
 	// AgentEngine owns shared execution policy rather than Session state. It receives
 	// model lookup/streaming, takes its static System Prompt from
-	// prompts/system-prompt.ts, and builds immutable per-Turn snapshots. Each accepted
-	// request gets a new AgentRun; the engine itself owns no conversation history or
-	// active-run identity.
+	// prompts/system-prompt.ts, builds immutable per-Turn snapshots, and shares one
+	// Session-stateless ContextManager for threshold checks and summary generation.
+	// Each accepted request gets a new AgentRun; the engine itself owns no conversation
+	// history, compaction state, or active-run identity.
 	const engine = new AgentEngine({
 		models: modelRuntime.models,
 		getProviderRequestPolicy: () => settings.getProviderRequestPolicy(),

@@ -1,9 +1,10 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels, fauxAssistantMessage, fauxProvider } from "@loopiq/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PROVIDER_REQUEST_POLICY } from "../base/options.ts";
+import { CONTEXT_SUMMARY_PREFIX } from "../context/compaction-prompt.ts";
 import { AgentEngine } from "../engine/agent-engine.ts";
 import { NodeExecutionEnv } from "../env/nodejs.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -41,11 +42,19 @@ async function createRuntime(name: string, dependencies: ReturnType<typeof creat
 	return (await createRuntimeWithStore(name, dependencies)).session;
 }
 
-function createDependencies(options?: { tokensPerSecond?: number; tokenSize?: number }) {
+function createDependencies(options?: {
+	tokensPerSecond?: number;
+	tokenSize?: number;
+	contextWindow?: number;
+	maxTokens?: number;
+}) {
 	const faux = fauxProvider({
 		provider: `faux-${Math.random()}`,
 		tokensPerSecond: options?.tokensPerSecond,
 		tokenSize: options?.tokenSize ? { min: options.tokenSize, max: options.tokenSize } : undefined,
+		models: options?.contextWindow
+			? [{ id: "faux-1", contextWindow: options.contextWindow, maxTokens: options.maxTokens }]
+			: undefined,
 	});
 	const models = createModels();
 	models.setProvider(faux.provider);
@@ -57,6 +66,30 @@ function createDependencies(options?: { tokensPerSecond?: number; tokenSize?: nu
 			getProviderRequestPolicy: () => DEFAULT_PROVIDER_REQUEST_POLICY,
 		}),
 	};
+}
+
+async function createRuntimeWithLargeHistory(name: string, dependencies: ReturnType<typeof createDependencies>) {
+	const directory = await mkdtemp(join(tmpdir(), `loopiq-${name}-`));
+	temporaryDirectories.push(directory);
+	const env = new NodeExecutionEnv({ cwd: directory });
+	const sessionPath = join(directory, "session.jsonl");
+	const store = await JsonlSessionStore.create(env, sessionPath, { workspaceDir: directory, sessionId: name });
+	await store.appendMessage({ role: "user", content: "old-context-".repeat(4_200), timestamp: 1 });
+	await store.appendMessage({
+		...fauxAssistantMessage("old answer", { timestamp: 2 }),
+		provider: dependencies.model.provider,
+		model: dependencies.model.id,
+	});
+	const session = await AgentSession.load({
+		env,
+		store,
+		engine: dependencies.engine,
+		defaults: {
+			model: { providerId: dependencies.model.provider, modelId: dependencies.model.id },
+			thinkingLevel: "high",
+		},
+	});
+	return { session, store, sessionPath };
 }
 
 function assistantText(message: { content: Array<{ type: string; text?: string }> } | undefined): string {
@@ -126,6 +159,98 @@ describe("AgentSession", () => {
 		expect(restore).toHaveBeenCalledTimes(1);
 		expect(assistantText(second.finalMessage)).toContain("first-answer");
 		expect(assistantText(second.finalMessage)).toContain("second-question");
+	});
+
+	it("compacts before the provider request and restores the committed replacement", async () => {
+		const dependencies = createDependencies({ contextWindow: 12_000, maxTokens: 512 });
+		let summaryRequest: { tools?: Array<{ name: string }>; messages: Array<{ content: unknown }> } | undefined;
+		let normalMessages: Array<{ role: string; content?: unknown }> = [];
+		dependencies.faux.setResponses([
+			(request) => {
+				summaryRequest = request;
+				return fauxAssistantMessage("durable summary");
+			},
+			(request) => {
+				normalMessages = request.messages;
+				return fauxAssistantMessage("done");
+			},
+		]);
+		const { session, store, sessionPath } = await createRuntimeWithLargeHistory("compaction-success", dependencies);
+		const events: string[] = [];
+		session.subscribe((envelope) => events.push(envelope.event.type));
+
+		const result = await session.startRun({ text: "current request" }).result;
+
+		expect(result.status).toBe("completed");
+		expect(summaryRequest?.tools).toBeUndefined();
+		expect(String(summaryRequest?.messages[0]?.content)).toContain("old-context-");
+		expect(normalMessages[0]?.role).toBe("user");
+		expect(JSON.stringify(normalMessages[0]?.content)).toContain(CONTEXT_SUMMARY_PREFIX.split("\n")[0]);
+		expect(JSON.stringify(normalMessages)).not.toContain("old-context-".repeat(100));
+		expect(events.filter((type) => type.startsWith("context_compaction"))).toEqual([
+			"context_compaction_started",
+			"context_compaction_completed",
+		]);
+		const entryTypes = (await readFile(sessionPath, "utf8"))
+			.trim()
+			.split("\n")
+			.slice(1)
+			.map((line) => JSON.parse(line).type);
+		expect(entryTypes).toContain("context_compaction");
+		const restored = store.restore().messages;
+		expect(restored[0]?.role).toBe("user");
+		expect(JSON.stringify(restored[0])).toContain(CONTEXT_SUMMARY_PREFIX.split("\n")[0]);
+		expect(JSON.stringify(restored)).not.toContain("old-context-".repeat(100));
+	});
+
+	it("keeps both contexts unchanged when the compaction checkpoint cannot be persisted", async () => {
+		const dependencies = createDependencies({ contextWindow: 12_000, maxTokens: 512 });
+		dependencies.faux.setResponses([fauxAssistantMessage("summary")]);
+		const { session, store } = await createRuntimeWithLargeHistory("compaction-persistence-failure", dependencies);
+		vi.spyOn(store, "appendCompaction").mockRejectedValueOnce(new Error("checkpoint failed"));
+		const compactionEvents: Array<{ type: string; code?: string }> = [];
+		session.subscribe((envelope) => {
+			if (!envelope.event.type.startsWith("context_compaction")) return;
+			compactionEvents.push({
+				type: envelope.event.type,
+				code: envelope.event.type === "context_compaction_failed" ? envelope.event.error.code : undefined,
+			});
+		});
+
+		const result = await session.startRun({ text: "current request" }).result;
+
+		expect(result.status).toBe("failed");
+		expect(compactionEvents).toEqual([
+			{ type: "context_compaction_started", code: undefined },
+			{ type: "context_compaction_failed", code: "commit_failed" },
+		]);
+		expect(JSON.stringify(store.restore().messages)).toContain("old-context-".repeat(100));
+		expect(JSON.stringify(store.restore().messages)).not.toContain(CONTEXT_SUMMARY_PREFIX);
+	});
+
+	it("aborts summary generation without installing a checkpoint", async () => {
+		const dependencies = createDependencies({ contextWindow: 12_000, maxTokens: 512, tokensPerSecond: 1 });
+		dependencies.faux.setResponses([fauxAssistantMessage("a summary that should be interrupted")]);
+		const { session, store } = await createRuntimeWithLargeHistory("compaction-abort", dependencies);
+		let releaseStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			releaseStarted = resolve;
+		});
+		const compactionEvents: string[] = [];
+		session.subscribe((envelope) => {
+			if (!envelope.event.type.startsWith("context_compaction")) return;
+			compactionEvents.push(envelope.event.type);
+			if (envelope.event.type === "context_compaction_started") releaseStarted();
+		});
+
+		const handle = session.startRun({ text: "current request" });
+		await started;
+		await session.abort(handle.runId);
+		const result = await handle.result;
+
+		expect(result.status).toBe("aborted");
+		expect(compactionEvents).toEqual(["context_compaction_started", "context_compaction_failed"]);
+		expect(JSON.stringify(store.restore().messages)).not.toContain(CONTEXT_SUMMARY_PREFIX);
 	});
 
 	it("runs two Sessions concurrently through one stateless engine without context bleed", async () => {

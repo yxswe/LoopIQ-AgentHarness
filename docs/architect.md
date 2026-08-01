@@ -86,6 +86,10 @@ The implemented lifecycle contract is
 The newcomer-oriented execution walkthrough is
 [`techniquedocs/agent-run.md`](./techniquedocs/agent-run.md).
 
+The implemented context compaction contract is documented in
+[`techniquedocs/context-management.md`](./techniquedocs/context-management.md). It defines the per-Turn
+trigger, budget policy, summary boundary, and durable replacement semantics.
+
 Provider construction, credential persistence, model discovery, authentication,
 and runtime model switching are documented in
 [`techniquedocs/model-runtime-design.md`](./techniquedocs/model-runtime-design.md).
@@ -135,10 +139,11 @@ and metadata are not part of the Agent configuration or runtime API.
 - `agent-engine.ts` — Session-stateless execution owner. It captures shared
   model lookup/streaming, the static System Prompt imported from
   `packages/agent/src/prompts/system-prompt.ts`, Provider request policy, and Turn
-  snapshot construction. It creates one short-lived `AgentRun` per accepted
-  request.
+  snapshot construction. It shares one stateless `ContextManager` and creates
+  one short-lived `AgentRun` per accepted request.
 - `agent-run.ts` — one short-lived mutable driver per accepted request. It owns
-  provider/tool loop state and communicates only through `AgentRunPort`.
+  provider/tool loop state, invokes context compaction before each Provider
+  request, and communicates only through `AgentRunPort`.
   Its complete flow, ordering guarantees, scenarios, and design rationale are
   documented in [`techniquedocs/agent-run.md`](./techniquedocs/agent-run.md).
 - `agent-run-control.ts` — separates whole-run abort from provider-only
@@ -150,6 +155,9 @@ and metadata are not part of the Agent configuration or runtime API.
   lifecycle events.
 - `turn-state.ts` — immutable per-provider-Turn snapshot plus conversion to the
   request-local model context.
+- `context/context-manager.ts` — Session-stateless context usage estimation,
+  legal cut-point planning, bounded summary generation, and replacement
+  construction.
 - `session/agent-session.ts` — owns one loaded Session's incrementally maintained
   in-memory messages, config, environment-bound default tool construction and
   instances, Provider Session-resource cleanup, steering queue, persistence,
@@ -213,9 +221,10 @@ invariants, evolution policy, and current limitations.
 
 - `session/storage/jsonl-session-store.ts` — the single persistence abstraction. It validates
   the header and entries, owns physical ordering, serializes appends, and
-  restores model-visible messages plus the latest Session configuration once
-  when a Session is loaded. Unsupported types, malformed entries, and duplicate
-  IDs are rejected.
+  restores model-visible messages, context-compaction replacements, and the
+  latest Session configuration once when a Session is loaded. Unsupported
+  types, malformed entries, invalid compaction ranges, and duplicate IDs are
+  rejected.
   Entry IDs use uuidv7.
 - `session/storage/session-store-lease.ts` — exclusive `runtime.lock` writer lease
   preventing a second process from opening the same Session for writes.
@@ -246,7 +255,9 @@ Opening a Session restores model-visible messages from validated JSONL entries
 once. Successful message commits append to JSONL first and then update the
 loaded `AgentSession` message array. A Run copies that history once when it
 starts and then maintains its request-local context incrementally. Later Turn
-refreshes do not copy the complete history or scan storage.
+refreshes do not copy the complete history or scan storage. Context compaction
+also appends its checkpoint before replacing both loaded and request-local
+contexts.
 
 ### Base types (`src/base/`)
 
@@ -254,9 +265,10 @@ refreshes do not copy the complete history or scan storage.
 - `resource.ts` — `AgentTool`, `Skill` (from SKILL.md), and `PromptTemplate`.
 - `options.ts` — safe persisted `ProviderRequestPolicy`, trusted in-memory
   model/Session configuration, and `ThinkingLevel`.
-- `events.ts` — read-only Agent, Turn, message, tool, Provider-response, queue,
-  and configuration notification contracts. Assistant progress uses bounded
-  Agent-owned deltas; complete messages appear only at lifecycle boundaries.
+- `events.ts` — read-only Agent, Turn, message, tool, Provider-response,
+  context-compaction, queue, and configuration notification contracts.
+  Assistant progress uses bounded Agent-owned deltas; complete messages appear
+  only at lifecycle boundaries.
 - `types.ts` — `Result<T,E>`, and `SessionError` / `AgentRuntimeError`
   variants.
 
@@ -359,14 +371,18 @@ real external boundary.
    selection with its static System Prompt, tool policy, and current Agent-wide
    Provider request policy to create a Turn snapshot, then starts a run through
    a run-bound port and control channel.
-4. A fresh `AgentRun` streams through `@loopiq/ai`, retains growing Provider
+4. Before every Provider request, `AgentRun` asks the shared `ContextManager`
+   whether the imminent context crosses the active model's threshold. Required
+   compaction blocks that request until `AgentSession` persists and installs
+   the replacement.
+5. The fresh `AgentRun` streams through `@loopiq/ai`, retains growing Provider
    partial messages only in its request-local context, emits bounded progress
    deltas, executes tools, and drains the Session-owned steering queue at safe
    points.
-5. Complete outputs and tool results pass through `AgentRunPort` to
+6. Complete outputs and tool results pass through `AgentRunPort` to
    `AgentSession`, which appends them to `JsonlSessionStore` and only then adds
    them to its in-memory message context.
-6. `AgentSession` envelopes notifications with Session/run identity; the Agent
+7. `AgentSession` envelopes notifications with Session/run identity; the Agent
    routes subscriptions to Server and CLI adapters.
 
 ## Key Patterns
@@ -375,5 +391,6 @@ real external boundary.
 - One shared Session-stateless engine with one active structural run per
   Session and concurrent runs across Sessions.
 - Append-only, linear JSONL Session log.
+- Blocking, durable context compaction before Provider requests.
 - Lazy provider/model loading.
 - Parallel tool execution with source-ordered tool-result messages.

@@ -22,7 +22,8 @@ The durable log and the loaded runtime context are separate concerns:
 
 ## Goals
 
-- Persist each completed message and Session configuration in append order.
+- Persist each completed message, Session configuration, and context replacement
+  in append order.
 - Reopen a Session and reconstruct the same ordered model-visible history.
 - Avoid scanning the complete durable log at every Turn boundary.
 - Make a committed message visible in memory only after its append succeeds.
@@ -38,8 +39,7 @@ The current implementation does not support:
 - multiple branches inside one Session file;
 - entry labels or Session display names;
 - branch-scoped model or thinking-level configuration;
-- cloning or forking history through a Session repository API;
-- context compaction or summary entries.
+- cloning or forking history through a Session repository API.
 
 If a future product requirement needs branching, it must start with an explicit
 format and API design rather than reusing the linear ordering rules implicitly.
@@ -58,10 +58,10 @@ The first non-empty line is the Session header:
 ```
 
 Every following non-empty line is one entry. Entries contain a unique `id`, an
-ISO timestamp, and one of two supported types:
+ISO timestamp, and one of three supported types:
 
 ```ts
-type SessionEntry = MessageEntry | SessionConfigurationEntry;
+type SessionEntry = MessageEntry | SessionConfigurationEntry | ContextCompactionEntry;
 ```
 
 ### `message`
@@ -90,18 +90,29 @@ linear ordering.
 }
 ```
 
+### `context_compaction`
+
+Stores one durable replacement of the currently visible message prefix. The
+entry contains a positive `compactedMessageCount` and one summary `UserMessage`.
+It does not duplicate the retained suffix. See
+[`techniquedocs/context-management.md`](./techniquedocs/context-management.md) for trigger and cut-point
+rules.
+
 ## Persistence Invariants
 
 `JsonlSessionStore` enforces these invariants:
 
 1. The header requires one non-empty absolute `workspaceDir`.
-2. Only `message` and `session_config` entries are accepted.
+2. Only `message`, `session_config`, and `context_compaction` entries are
+   accepted.
 3. Every entry has a non-empty unique ID and timestamp.
 4. Required type-specific fields are validated before an entry is accepted.
-5. Physical JSONL order is authoritative.
-6. `restore()` returns a new message array and a cloned configuration value.
-7. Appends are serialized inside one Store instance.
-8. A line is written successfully before the in-memory entry index is updated.
+5. A compaction count cannot exceed the visible message count at its physical
+   position.
+6. Physical JSONL order is authoritative.
+7. `restore()` returns a new message array and a cloned configuration value.
+8. Appends are serialized inside one Store instance.
+9. A line is written successfully before the in-memory entry index is updated.
 
 The per-Session `runtime.lock` prevents two processes from opening the same log
 for writes. It does not coordinate different Sessions that share a working
@@ -165,11 +176,27 @@ Closing and reopening a Session discards the loaded array and reconstructs it
 once from the durable log, which also verifies that incremental memory state
 and persistence converge.
 
+Context replacement uses a second strict commit path:
+
+```text
+AgentRun
+  -> AgentRunPort.commitCompaction(count, summary)
+  -> verify AgentRun and AgentSession message counts agree
+  -> JsonlSessionStore.appendCompaction(count, summary)
+  -> replace AgentSession.messages
+  -> replace AgentRun context
+  -> emit context_compaction_completed
+```
+
+If validation, summary generation, or persistence fails, neither replacement
+is installed and the normal Provider request does not start.
+
 ## Initial Context Restoration
 
 Restoration scans validated entries once in physical order. `message` entries
-contribute their stored messages; `session_config` entries replace the restored
-configuration and never enter model context.
+append their stored messages; `context_compaction` entries replace the declared
+visible prefix with their summary; `session_config` entries replace the
+restored configuration and never enter model context.
 
 ## Internal Modules
 

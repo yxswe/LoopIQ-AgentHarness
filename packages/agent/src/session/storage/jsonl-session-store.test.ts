@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../base/messages.ts";
+import { CONTEXT_SUMMARY_PREFIX, CONTEXT_SUMMARY_SUFFIX } from "../../context/compaction-prompt.ts";
 import { NodeExecutionEnv } from "../../env/nodejs.ts";
 import { JsonlSessionStore } from "./jsonl-session-store.ts";
 
@@ -92,6 +93,39 @@ describe("JsonlSessionStore", () => {
 		]);
 	});
 
+	it("replays compaction checkpoints in physical order", async () => {
+		const store = await JsonlSessionStore.create(env, sessionPath, {
+			workspaceDir: directory,
+			sessionId: "session-compaction",
+		});
+		const firstSummary = userMessage(`${CONTEXT_SUMMARY_PREFIX}first${CONTEXT_SUMMARY_SUFFIX}`);
+		const secondSummary = userMessage(`${CONTEXT_SUMMARY_PREFIX}second${CONTEXT_SUMMARY_SUFFIX}`);
+		await store.appendMessage(userMessage("old-a"));
+		await store.appendMessage(userMessage("old-b"));
+		await store.appendCompaction(2, firstSummary);
+		await store.appendMessage(userMessage("new-a"));
+		await store.appendMessage(userMessage("new-b"));
+		await store.appendCompaction(3, secondSummary);
+		await store.appendMessage(userMessage("current"));
+
+		const reopened = await JsonlSessionStore.open(env, sessionPath);
+		expect(reopened.restore().messages).toEqual([secondSummary, expect.objectContaining({ content: "current" })]);
+		const entryTypes = (await readFile(sessionPath, "utf8"))
+			.trim()
+			.split("\n")
+			.slice(1)
+			.map((line) => JSON.parse(line).type);
+		expect(entryTypes).toEqual([
+			"message",
+			"message",
+			"context_compaction",
+			"message",
+			"message",
+			"context_compaction",
+			"message",
+		]);
+	});
+
 	it("rejects obsolete entry types, malformed configuration, and duplicate ids", async () => {
 		const header = {
 			type: "session",
@@ -132,6 +166,41 @@ describe("JsonlSessionStore", () => {
 
 		await writeFile(sessionPath, `${[header, message, message].map(JSON.stringify).join("\n")}\n`);
 		await expect(JsonlSessionStore.open(env, sessionPath)).rejects.toThrow("duplicates entry id duplicate");
+	});
+
+	it("rejects malformed or out-of-range compaction entries", async () => {
+		const header = {
+			type: "session",
+			id: "session-invalid-compaction",
+			timestamp: new Date().toISOString(),
+			workspaceDir: directory,
+		};
+		const baseCompaction = {
+			type: "context_compaction",
+			id: "compaction",
+			timestamp: new Date().toISOString(),
+			summary: userMessage("summary"),
+		};
+
+		await writeFile(
+			sessionPath,
+			`${[header, { ...baseCompaction, compactedMessageCount: 0 }].map(JSON.stringify).join("\n")}\n`,
+		);
+		await expect(JsonlSessionStore.open(env, sessionPath)).rejects.toThrow("invalid compactedMessageCount");
+
+		await writeFile(
+			sessionPath,
+			`${[header, { ...baseCompaction, compactedMessageCount: 1 }].map(JSON.stringify).join("\n")}\n`,
+		);
+		await expect(JsonlSessionStore.open(env, sessionPath)).rejects.toThrow("compacts more messages than are visible");
+
+		const store = await JsonlSessionStore.create(env, sessionPath, {
+			workspaceDir: directory,
+			sessionId: "session-invalid-append",
+		});
+		await expect(store.appendCompaction(1, userMessage("summary"))).rejects.toThrow(
+			"compacts more messages than are visible",
+		);
 	});
 
 	it("does not overwrite a malformed session while opening", async () => {

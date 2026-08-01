@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last audited: 2026-07-30
+Last audited: 2026-08-01
 
 This document defines the public `Agent` lifecycle and its internal split
 between `AgentEngine`, `AgentRun`, `AgentSession`, and
@@ -25,7 +25,8 @@ multi-Session ownership is documented in
 - `AgentEngine` is an internal Session-stateless execution owner. It owns model
   lookup/streaming, the static System Prompt imported from
   `packages/agent/src/prompts/system-prompt.ts`, Provider request policy, and Turn
-  snapshot construction. It retains no current Session or run.
+  snapshot construction. It shares one stateless `ContextManager` and retains
+  no current Session or run.
 - Each `engine.run()` call creates one short-lived `AgentRun` containing mutable
   provider/tool-loop state for that request.
 - `AgentSession` owns one loaded Session's Store, environment, default tool
@@ -99,6 +100,7 @@ directly. Its `AgentRunPort` provides only:
 
 - steering drain;
 - complete-message commit;
+- durable context-compaction commit;
 - pending Session-state flush;
 - next-snapshot construction;
 - notification dispatch.
@@ -116,10 +118,12 @@ The implemented ordering is:
 2. A complete user, assistant, or tool-result message is appended to the JSONL
    Store and then added to the loaded in-memory context.
 3. Only after append succeeds is `message_end` emitted.
-4. `turn_end` listeners are awaited while their error is captured.
-5. Pending Session state is flushed even when a `turn_end` listener failed.
-6. A successful boundary emits `save_point` and flushes state created there.
-7. A fresh snapshot is built before another provider request.
+4. Required pre-request compaction appends its checkpoint, replaces the loaded
+   Session context, replaces the Run context, and then emits completion.
+5. `turn_end` listeners are awaited while their error is captured.
+6. Pending Session state is flushed even when a `turn_end` listener failed.
+7. A successful boundary emits `save_point` and flushes state created there.
+8. A fresh snapshot is built before another provider request.
 
 Persistence is an explicit port operation, not an event subscriber. Subscribers
 therefore observe committed transcript state.
@@ -212,7 +216,6 @@ other unpredictably.
 
 ## Current Limitations
 
-- Context compaction is not implemented.
 - Agent configuration controls Provider/SDK retry attempts, while higher-level
   Agent retry remains unimplemented.
 - Credential validation currently uses a catalog model for a minimal
@@ -231,4 +234,6 @@ reservation, stale-command rejection, run-correlated envelopes,
 inference-only steering, manager single-flight open, config restore, writer
 lease contention, and running close/delete rejection.
 Credential tests also cover request-time resolution and removal during an
-active Run.
+active Run. Context tests cover threshold and cut-point planning, tool-call
+integrity, incremental summaries, durable replay, persistence failure, and
+whole-run abort during summary generation.
