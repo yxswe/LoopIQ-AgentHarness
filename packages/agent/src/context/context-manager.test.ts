@@ -115,20 +115,40 @@ describe("ContextManager", () => {
 		expect(prepared?.retainedMessages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
 	});
 
-	it("rejects malformed tool-call history instead of compacting it away", () => {
+	it("allows missing tool results that provider message normalization can repair", () => {
 		const { manager, model } = createFixture();
-		const unmatchedResult: ToolResultMessage = {
-			role: "toolResult",
-			toolCallId: "missing-call",
-			toolName: "Read",
-			content: [{ type: "text", text: "result" }],
-			isError: false,
-			timestamp: 2,
-		};
+		const toolCall = {
+			...assistant("", 2),
+			content: [
+				{ type: "text" as const, text: "work".repeat(400) },
+				fauxToolCall("Read", { path: "missing.txt" }, { id: "missing-result" }),
+			],
+		} as AgentMessage;
 
-		expect(() =>
-			manager.prepare(context([user("old".repeat(1_200), 1), unmatchedResult, user("current", 3)]), model),
-		).toThrow(/no matching pending tool call/);
+		const prepared = manager.prepare(context([user("old".repeat(1_200), 1), toolCall, user("current", 3)]), model);
+
+		expect(prepared?.messagesToSummarize.map((message) => message.role)).toEqual(["user", "assistant"]);
+		expect(prepared?.retainedMessages.map((message) => message.role)).toEqual(["user"]);
+	});
+
+	it("allows an aborted assistant with an incomplete tool call to be compacted", () => {
+		const { manager, model } = createFixture();
+		const abortedToolCall = {
+			...assistant("", 2),
+			content: [
+				{ type: "text" as const, text: "partial".repeat(250) },
+				fauxToolCall("Read", { path: "partial.txt" }, { id: "aborted-call" }),
+			],
+			stopReason: "aborted" as const,
+		} as AgentMessage;
+
+		const prepared = manager.prepare(
+			context([user("old".repeat(1_200), 1), abortedToolCall, user("retry", 3)]),
+			model,
+		);
+
+		expect(prepared?.messagesToSummarize.map((message) => message.role)).toEqual(["user", "assistant"]);
+		expect(prepared?.retainedMessages).toEqual([expect.objectContaining({ role: "user", timestamp: 3 })]);
 	});
 
 	it("updates an existing summary from only the newly compacted raw messages", async () => {

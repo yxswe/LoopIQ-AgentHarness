@@ -85,7 +85,6 @@ export class ContextManager {
 		if (budget.contextWindow <= 0 || budget.beforeTokens < budget.triggerTokens) return undefined;
 
 		const messages = context.messages;
-		this.validateToolHistory(messages, budget);
 		const summaryMaxTokens = Math.min(SUMMARY_MAX_TOKENS, model.maxTokens > 0 ? model.maxTokens : SUMMARY_MAX_TOKENS);
 		const previousSummary = this.extractPreviousSummary(messages[0]);
 		const rawStart = previousSummary === undefined ? 0 : 1;
@@ -343,32 +342,6 @@ export class ContextManager {
 			);
 		}
 		return index;
-	}
-
-	private validateToolHistory(messages: readonly AgentMessage[], budget: ContextBudget): void {
-		let pendingCallIds = new Set<string>();
-		for (const message of messages) {
-			if (message.role === "toolResult") {
-				if (!pendingCallIds.delete(message.toolCallId)) {
-					throw new ContextCompactionError(
-						"uncompactable",
-						`Tool result ${message.toolCallId} has no matching pending tool call`,
-						budget,
-					);
-				}
-				continue;
-			}
-			if (pendingCallIds.size > 0) {
-				throw new ContextCompactionError("uncompactable", "Assistant tool calls are missing results", budget);
-			}
-			if (message.role !== "assistant") continue;
-			pendingCallIds = new Set(
-				message.content.filter((content) => content.type === "toolCall").map((content) => content.id),
-			);
-		}
-		if (pendingCallIds.size > 0) {
-			throw new ContextCompactionError("uncompactable", "Assistant tool calls are missing results", budget);
-		}
 	}
 
 	private isLegalCut(message: AgentMessage): boolean {
