@@ -1,401 +1,267 @@
 # Harbor Local Evaluation Integration
 
-**Status:** Proposed
+**Status:** Phase 0 adapter implemented; end-to-end Harbor container smoke pending
 
-**Reviewed:** 2026-08-05
+**Reviewed:** 2026-08-10
 
-**Initial transport:** LoopIQ CLI in a Harbor trial container
+**Initial transport:** LoopIQ CLI in one Harbor trial container
 
-**Harbor reference:** [`harbor-framework/harbor` at `cc4b7be`](https://github.com/harbor-framework/harbor/commit/cc4b7be7c1ace2621b38c4e2e13ef736a9bc884f)
+**Harbor compatibility reference:** [`harbor-framework/harbor` at `cc4b7be`](https://github.com/harbor-framework/harbor/commit/cc4b7be7c1ace2621b38c4e2e13ef736a9bc884f)
 
 ## Decision
 
-Use Harbor's installed-agent adapter pattern to invoke one LoopIQ CLI process
-per trial. Do not add a new LoopIQ Server layer for the first integration.
+Harbor invokes one LoopIQ CLI process per trial through a Harbor installed-agent
+adapter. The integration does not add a LoopIQ Server, another Agent runtime, or
+Harbor types to `packages/agent` or `packages/cli`.
 
-The command boundary is the smallest surface that already exercises the real
-Agent composition root, Session persistence, Provider selection, tools, event
-stream, and shutdown path. Harbor provides trial scheduling, environment
-isolation, optional agent-phase timeout enforcement, verifier execution, and
-configurable environment deletion. The LoopIQ evaluation profile must set those
-limits explicitly and verify cleanup rather than assume their defaults. Adding
-a second long-lived service would duplicate lifecycle ownership before LoopIQ
-has a stable replayable evaluation transport.
+This command boundary already exercises the real Agent composition root,
+Session persistence, Provider selection, tools, context compaction, events, and
+shutdown. Harbor owns scheduling, the trial environment, the outer timeout,
+verification, result collection, and environment deletion.
 
-The current `@loopiq/server` remains the DevUI backend. Its Run endpoint returns
-Session and Run identities, while live SSE delivery has no durable replay
-contract. It is useful for browser interaction, but it is not the source of
-truth for unattended evaluation artifacts.
-
-## Trial Lifecycle and Ownership
+## Implementation Layout
 
 ```text
-Harbor evaluation
-  -> create and start the Agent environment
-  -> adapter setup/install
-  -> adapter supervisor invokes one LoopIQ CLI process group
-  -> CLI creates Agent + fresh Session + one Run
-  -> normal settlement: CLI emits run_settled and attempts Agent shutdown
-     timeout/failure: partial logs; supervisor terminates the process group
-  -> adapter writes one trial terminal manifest
-  -> verifier branch
-       separate verifier: Harbor stops Agent environment, then runs verifier
-       shared verifier: prove Agent processes stopped, run verifier, then Harbor stops environment
-  -> Harbor records the configured deletion/cleanup outcome
-  -> backfill AgentContext from synchronized logs when it is still empty
+integrations/harbor/
+  loopiq.py              Harbor import-path installed-agent adapter
+  supervisor.py          in-container CLI process-group supervisor
+  test_supervisor.py     protocol, timeout, and process-group tests
 ```
 
-This is a lifecycle requirement, not an unconditional Harbor guarantee. The
-agent-phase timeout is optional unless the task/job config supplies a finite
-`timeout_sec` or override. Environment deletion is configurable and cleanup can
-fail. The initial profile must set `environment.delete: true`, retain cleanup
-errors, and verify that no process remains.
+The adapter class is loaded with:
 
-Prefer a separate verifier environment when the benchmark supports it, because
-the Agent environment is stopped before scoring. With a shared verifier, the
-adapter supervisor must prove that LoopIQ and every child process have exited
-before the verifier runs; otherwise a background command can continue changing
-the workspace during scoring.
+```text
+integrations.harbor.loopiq:LoopIQ
+```
+
+The LoopIQ repository root must therefore be on the Harbor host's Python import
+path. The first integration intentionally uses Harbor's import-path support and
+does not add LoopIQ to Harbor's built-in `AgentName` registry.
+
+The adapter targets the pinned Harbor revision above, declares
+`SUPPORTS_ATIF = False`, and does not support native resume. `packages/ai`
+remains read-only and is consumed only through the Agent.
+
+## Ownership
 
 | Owner | Responsibilities | Must not own |
 | --- | --- | --- |
-| Harbor | Trial scheduling, environment lifecycle, configured agent-phase timeout, verifier, result collection, cleanup attempt | LoopIQ Session semantics or internal event interpretation |
-| LoopIQ Harbor adapter | Install a pinned LoopIQ artifact, isolate Agent Home, supervise the CLI process group, capture output, normalize outcome, write trace artifacts | Provider/tool loop, Session persistence, scoring, or a second Agent runtime |
-| LoopIQ CLI | Construct one Agent, create/open one Session, start one Run, render events, map terminal status, shut down owned resources | Container lifetime, benchmark verification, or cross-trial state |
-| LoopIQ Agent | Provider/tool turns, context compaction, message persistence, Run identity, abort, event production | Harbor schemas, artifact layout, or trial scheduling |
-| Verifier | Inspect workspace/output and calculate task reward | Agent lifecycle or trace repair |
+| Harbor | Trial scheduling, environment lifecycle, outer timeout, verifier, result collection, cleanup | LoopIQ Session or turn semantics |
+| LoopIQ Harbor adapter | Pinned install, isolated Agent Home, credential bootstrap, CLI supervision, log capture, normalized manifest | Provider/tool loop, scoring, or a second Agent |
+| LoopIQ CLI | Construct Agent, select one Session, run once, map events and terminal status, shut down resources | Container lifetime or benchmark policy |
+| LoopIQ Agent | Provider/tool turns, context compaction, persistence, Run identity, abort, native events | Harbor schemas, artifacts, or scheduling |
+| Verifier | Inspect the final Workspace and calculate reward | Agent lifecycle or trace repair |
 
-The "LoopIQ Agent adapter" is therefore Harbor-side glue, not another Agent and
-not a LoopIQ Server. It translates Harbor's installed-agent lifecycle into one
-CLI invocation and translates LoopIQ artifacts back into Harbor's result
-context.
+## Trial Flow
 
-## Initial Invocation Contract
+```text
+Harbor creates the trial environment
+  -> adapter installs one pinned LoopIQ git revision
+  -> adapter creates /tmp/loopiq-home
+  -> adapter supplies one API token through a mode-0600 temporary file
+  -> loopiq providers add ... --token-stdin verifies and persists the credential
+  -> adapter uploads the instruction as a mode-0600 temporary file
+  -> supervisor starts one LoopIQ CLI process group
+  -> CLI creates Agent + fresh Session + one Run
+  -> CLI writes versioned JSONL and one run_completed terminal
+  -> supervisor validates the stream and terminates any remaining process group
+  -> supervisor writes one run manifest
+  -> Harbor synchronizes logs and runs the verifier
+  -> adapter backfills the small AgentContext summary from the manifest
+  -> Harbor records cleanup and deletion results
+```
 
-The logical LoopIQ command inside the adapter supervisor is:
+The Harbor agent-phase timeout is the outer safety boundary. The supervisor's
+inner timeout must be shorter so it can request graceful abort, capture the
+outcome, and write its manifest before Harbor stops the phase.
+
+## Harbor Configuration Shape
+
+A job or trial config uses the import-path adapter and places the immutable
+LoopIQ git revision in adapter kwargs:
+
+```yaml
+agent:
+  import_path: integrations.harbor.loopiq:LoopIQ
+  model_name: openai/gpt-5.2
+  override_timeout_sec: 330
+  kwargs:
+    version: "<full-loopiq-git-sha>"
+    inner_timeout_sec: 300
+    shutdown_grace_sec: 10
+  env:
+    LOOPIQ_API_TOKEN: "${LOOPIQ_API_TOKEN}"
+environment:
+  delete: true
+```
+
+Run Harbor from a Python environment compatible with the pinned Harbor
+revision and make this repository importable, for example by setting
+`PYTHONPATH` to the LoopIQ repository root. The exact task, environment type,
+model, image, verifier mode, and network allowlist remain benchmark choices.
+
+## Installation and Credential Bootstrap
+
+The adapter requires a full git revision, clones only that revision into the
+trial environment, runs `npm ci` and `npm run build`, and exposes the resulting
+`loopiq` executable. It installs Node 22 through Harbor's Node helper and
+requires `python3` and `procps` for supervision.
+
+Each trial uses:
+
+```text
+HOME=/tmp/loopiq-home
+```
+
+This isolates `agent.json`, `credentials.json`, Sessions, and locks from the
+developer and other trials. The first adapter supports API-token Providers only:
+
+1. Harbor resolves `LOOPIQ_API_TOKEN` from its host environment.
+2. The adapter uploads it as a private temporary file.
+3. `loopiq providers add PROVIDER --auth-method api_token --token-stdin` reads
+   the token from stdin, verifies it through Agent, and persists it only after
+   successful verification.
+4. `loopiq models list PROVIDER --refresh --format json` verifies that the
+   selected model is advertised by the configured Provider.
+5. The adapter deletes the temporary token file in a checked `finally` path.
+
+The secret is never placed in the shell command, JSONL stream, or manifest.
+OAuth-only `openai-codex` and interactive OAuth/device flows are rejected for
+this milestone.
+
+## CLI Invocation
+
+The supervised logical command is:
 
 ```bash
-loopiq run --workspace . \
+loopiq run \
+  --stdin \
+  --workspace . \
   --model "$LOOPIQ_MODEL" \
+  --thinking high \
   --format jsonl \
-  --stdin < "$instruction_path" \
+  < /tmp/loopiq-instruction.txt \
   > /logs/agent/loopiq-events.jsonl \
   2> /logs/agent/loopiq-stderr.log
 ```
 
-Harbor's environment `exec()` API does not expose a stdin stream or a child
-process/signal handle. The adapter must first upload the instruction as a mode
-`0600` temporary file, then invoke an adapter-owned supervisor that redirects
-that file to CLI stdin, redirects stdout/stderr directly to the Agent log mount,
-and records the CLI PID/process group. Do not interpolate the instruction into a
-logged shell command, and do not retain another full JSONL copy in an
-`ExecResult`.
+The instruction and token are uploaded files because Harbor's environment
+`exec()` contract does not provide a streaming stdin handle. The instruction is
+not interpolated into a logged shell command. Provider request-policy flags are
+not passed to `run`; persistent Agent configuration is their current owner.
 
-The supervisor runs with the trial workspace as its working directory. The
-adapter must not infer success from process exit code alone; it also inspects
-the correlated native `run_settled` event when present and preserves any
-mismatch in its trial terminal manifest.
+## Supervisor Contract
 
-Do not pass `--new`: it is currently read only for its mutual-exclusion check
-with `--session` and never changes selection behavior. Omitting `--session`
-already creates a fresh Session. Reintroduce `--new` in adapter examples only if
-Phase 0 CLI work gives it a tested contract.
+`supervisor.py` is invoked through `python3`, creates a new process session, and
+redirects CLI stdout/stderr directly to files. This avoids retaining another
+unbounded copy in Harbor's `ExecResult`.
 
-Do not pass Provider request policy flags to `loopiq run`; the current Run path
-silently ignores them. A clean trial home may be configured first with
-`loopiq config set-provider-request`, subject to Provider support, while
-the explicitly configured Harbor agent-phase timeout remains the outer safety
-limit.
-
-### Credentials and Trial Isolation
-
-- Use API-token authentication supplied through Harbor/container secrets for
-  the first milestone.
-- Normal `loopiq run` does not perform interactive login. It resolves
-  authentication when the Provider request starts; missing credentials become
-  a failed accepted Run. Supply ambient Provider environment credentials or
-  pre-provision the isolated Agent Home.
-- Do not invoke interactive `providers add` during a trial. Its TTY/OAuth flow
-  has no whole-command signal controller today.
-- Do not copy a developer's `~/.loopiq` into a trial.
-- Give every trial a clean, private home directory so `createAgent()` resolves
-  a separate `~/.loopiq` and cannot reuse credentials, configuration, Sessions,
-  or stale locks from another trial.
-- Redact secret environment variables from command logging and artifact
-  manifests.
-- Treat the current OAuth-only `openai-codex` path as unsupported for
-  non-interactive Phase 1 evaluation. Add it later only with an explicit secure
-  credential bootstrap contract.
-
-### Installation Contract
-
-The adapter setup stage must install an immutable LoopIQ build. The current CLI
-does not implement `loopiq --version`; adding trustworthy version output is a
-Phase 0 prerequisite, not a command the first draft adapter can assume. Until
-then, validate a pinned image/build manifest and record its image digest, source
-revision, package-lock digest, and Node version. Once available, connect version
-discovery through Harbor's installed-agent version-command hook.
-
-The current packages are private, and `@loopiq/agent` has no package version.
-That is a reproducibility blocker for a normal package-install adapter, not a
-reason to add a Server.
-
-## Proposed Adapter Contract
-
-The first adapter should extend Harbor's installed-agent base and use these
-semantics:
-
-### Setup
-
-1. Validate the expected OS, Node runtime, CLI executable, and LoopIQ build
-   identity.
-2. Create the clean trial home and artifact directories.
-3. Configure only the selected Provider/model and non-interactive API-token
-   credential inputs.
-4. Fail before task execution if the model or credential contract cannot be
-   validated without prompting.
-
-### Run
-
-1. Leave Harbor's `AgentContext` empty while execution is active.
-2. Upload the instruction as a private temporary file and redirect it to CLI
-   stdin; never interpolate it into the logged command.
-3. Redirect CLI stdout and stderr directly to separate Agent log files so
-   Harbor's `ExecResult` does not retain another unbounded copy.
-4. Run through a supervisor with an inner deadline below the explicitly
-   configured Harbor agent-phase timeout. Save the PID/process group. On the
-   inner deadline, send `SIGINT`, wait a finite grace period, then send
-   `SIGTERM` and `SIGKILL` to the entire group as needed. Only the first
-   `SIGINT` is currently a graceful LoopIQ abort path.
-5. On normal settlement, validate JSONL syntax, identity consistency, monotonic
-   sequence values, and exactly one native `run_settled` event. On startup
-   failure or forced termination, allow the native terminal to be missing and
-   record why.
-6. In all paths, write exactly one adapter-owned trial terminal manifest with
-   process exit status/signal, wall time, timeout decisions, cleanup state, and
-   native-terminal state.
-
-### Post-Run Context
-
-Harbor calls `populate_context_post_run()` only when `AgentContext` is still
-empty. The adapter's `run()` implementation must therefore not pre-populate
-metadata there.
-
-`populate_context_post_run()` should add a small summary and pointers to durable
-artifacts. It must not place the complete event stream or full model transcript
-inside `AgentContext`.
-
-For the first milestone:
+On the inner deadline it applies:
 
 ```text
-SUPPORTS_ATIF = False
+SIGINT -> grace -> SIGTERM -> grace -> SIGKILL
 ```
 
-ATIF support should be enabled only after a tested conversion exists and the
-LoopIQ source event schema is versioned.
+`SIGINT` gives the CLI a chance to call `Agent.abort()` and settle. Later
+signals contain a non-responsive CLI and its descendants. After every parent
+exit, including a nominal success, the supervisor inspects the process group;
+remaining live descendants receive `SIGTERM` and then `SIGKILL` if required.
+Zombie-only process-group entries are not treated as live Workspace mutators.
 
-## Agent Log Layout
+The supervisor validates the versioned JSONL stream without retaining it in
+memory. It checks:
 
-Use stable adapter-owned paths in Harbor's Agent log mount. `/logs/agent` is not
-the separate `/logs/artifacts` artifact-collector namespace:
+- every parsed event is an object using `loopiq.cli.event` schema version `1`;
+- at most one `run_started` and one `run_completed` are present;
+- a terminal has a matching accepted Session and Run identity;
+- mapped Agent source sequences are strictly increasing;
+- the terminal status is supported;
+- successful process exit agrees with a completed terminal.
+
+Startup failures may contain `command_failed` without a Run terminal. A timeout
+or hard kill may leave the terminal missing. Invalid schema, identity,
+sequencing, or exit/terminal agreement makes the supervisor exit `125` while
+preserving the evidence in the manifest.
+
+Supervisor exit codes reserve `124` for the inner deadline and `125` for a
+supervision/protocol failure. Otherwise the normalized CLI exit code is
+preserved.
+
+## Artifacts and Manifest
+
+The adapter writes stable files in Harbor's Agent log mount:
 
 ```text
 /logs/agent/
   loopiq-events.jsonl
   loopiq-stderr.log
   loopiq-run-manifest.json
-  trajectory.json              # Phase 2 ATIF conversion
 ```
 
-`loopiq-run-manifest.json` should contain at least:
+The manifest uses `loopiq.harbor.run_manifest` schema version `1` and records:
 
-- adapter name and version;
-- pinned Harbor version or source revision;
-- LoopIQ version and source revision;
-- CLI event schema version when available;
-- model and Provider identifiers without credentials;
-- Harbor trial/task identifiers;
-- Session, runtime, and Run identifiers;
-- start/end timestamps and wall-clock duration;
-- process exit code or terminating signal;
-- native terminal state (`present`, `missing`, or `invalid`) and reason;
-- terminal Run status and optional stop reason, including its source;
-- timeout/forced-kill flags;
-- paths, byte sizes, checksums, and truncation state for each artifact;
-- aggregate usage/cost with explicit `known`, `partial`, or `unknown` state.
+- adapter version and Harbor compatibility revision;
+- Harbor agent-session and durable trial-context identity;
+- LoopIQ revision, model, CLI version, and CLI event schema;
+- start/end timestamps and duration;
+- CLI PID, return code or signal, inner-timeout state, sent signals, and
+  remaining-process-group cleanup state;
+- native `run_started` and `run_completed`, parsed event count, validation
+  error, and exit/terminal mismatch;
+- byte size and SHA-256 digest for JSONL and stderr;
+- supervisor failures.
 
-Raw JSONL is one evidence source, not the sole authority. The normalized outcome
-must combine JSONL, stderr, the supervisor process record, and Harbor's trial
-result. Startup failure may produce only stderr, forced termination may leave a
-truncated JSONL file, and Harbor alone records outer timeout and environment
-cleanup outcomes. The manifest indexes those sources; it does not replace them.
+The raw stream is evidence, not the only authority. Harbor separately records
+its outer timeout, environment stop/delete result, and verifier result.
 
-## Trace Readiness
+After logs are synchronized to the host,
+`populate_context_post_run()` copies only usage totals and small metadata into
+`AgentContext`. It does not put the full event stream or transcript there.
+Usage remains explicitly `partial` or `unknown` because context-compaction
+inference is not yet included.
 
-### Data Available Today
+## Current Limitations
 
-The current event envelope exposes:
+- A real Harbor container smoke trial and clean-machine installation test are
+  still required; the local suite currently tests the supervisor itself.
+- The adapter builds from a pinned source revision rather than a published
+  immutable package/image artifact.
+- The Agent has no Run-wide deadline or work budget; Harbor and the supervisor
+  provide containment, not equivalent Agent semantics.
+- CLI stdout backpressure, EPIPE, total artifact limits, and full content
+  redaction profiles are not complete.
+- Agent shutdown does not own background Bash processes; the process-group
+  supervisor is the evaluation containment boundary.
+- Usage excludes context-compaction inference and retry/timing/tool-resource
+  observability is incomplete.
+- The first adapter is local/container execution only and does not resume an
+  in-flight Run.
+- No ATIF trajectory is emitted.
 
-- Session, runtime, and optional Run identity;
-- a per-runtime sequence and timestamp;
-- Agent, turn, message, tool, compaction, and settlement lifecycle events;
-- complete committed messages at `message_end`;
-- incremental, non-accumulated assistant progress deltas without a byte-size
-  guarantee;
-- Provider response status and selected redacted headers;
-- Provider-reported usage and cost on individual assistant messages when the
-  Provider supplies them.
+## Next Phases
 
-This is enough to debug an initial trial and construct a partial trajectory.
+### Phase 1 — Reliable Evaluation Boundary
 
-### Missing or Ambiguous Data
-
-| Gap | Evaluation impact | Planned owner |
-| --- | --- | --- |
-| No CLI schema name/version | Adapter changes can silently break after internal event evolution | CLI external event contract |
-| Incomplete `run_settled` terminal record | Exit code, final stop reason, returned messages, and usage require joining other records | Agent Run result plus CLI renderer |
-| No aggregate Run usage/cost | Benchmark accounting can omit turns or double count fields | Agent Run, surfaced by CLI |
-| Compaction inference omitted from Run accounting | Long tasks under-report tokens, latency, and cost | Context manager plus Agent Run accounting |
-| Incomplete retry/request timing events | Latency and reliability cannot be attributed accurately | Provider/Agent observability contract |
-| No stable tool-duration/resource metrics | Tool bottlenecks are difficult to compare | Agent event contract |
-| Partial content redaction policy | Raw traces can expose source, paths, prompts, outputs, or secrets | Adapter artifact policy plus CLI safe serialization |
-| No artifact/build identity | Results are not reproducible across revisions | Packaging plus adapter manifest |
-| No durable event replay | A Server subscriber can miss events after disconnect | Session event-delivery roadmap; not needed for CLI Phase 1 |
-
-The adapter must label current accounting as partial. It must not estimate
-missing compaction usage from unrelated message totals and present that value as
-Provider-reported truth.
-
-## ATIF Conversion Plan
-
-Use the adapter as the conversion owner. The Agent should emit a stable,
-LoopIQ-native event contract; it should not import Harbor or ATIF types into the
-core runtime.
-
-Phase 2 conversion should target `ATIF-v1.7` as validated against the pinned
-Harbor reference above, and include fixture tests for:
-
-- direct answer;
-- multiple sequential tool turns;
-- parallel tool calls with source-ordered results;
-- Provider failure and length termination;
-- foreground tool error and timeout;
-- context compaction;
-- steering and abort;
-- missing/partial usage;
-- artifact truncation and redaction.
-
-Only set `SUPPORTS_ATIF = True` after the synchronized host trial contains
-`agent/trajectory.json`, Harbor's `Trajectory` model validates it, and the
-fixture suite proves deterministic identity, ordering, and terminal mapping.
-For built-in trace export, register the LoopIQ adapter with Harbor's
-`AgentFactory`/`AgentName` path or first add equivalent import-path support;
-setting the boolean alone is insufficient.
-
-## Why the Server Is Deferred
-
-A Server transport becomes justified when a real caller requires one or more
-of the following:
-
-- a persistent warm Agent across multiple trials;
-- remote execution outside the Harbor container;
-- concurrent Run scheduling and admission control;
-- durable reconnect/replay with cursors;
-- a managed cancellation/status API independent of a child process;
-- centralized credential brokering or multi-tenant policy.
-
-If those requirements appear, extend the existing Server around the same Agent
-API and first complete the event-delivery roadmap. Do not create an evaluation-
-specific second runtime or make HTTP adapters own Provider/tool logic.
-
-## Phased TODO Plan
-
-### Phase 0 — One Reproducible Smoke Trial
-
-- Pin a LoopIQ source revision or build artifact and container image digest.
-- Add trustworthy `loopiq --version` output and record build identity.
-- Implement the minimal installed-agent adapter with `SUPPORTS_ATIF = False`.
-- Configure a finite Harbor agent-phase timeout and
-  `environment.delete: true`; do not rely on defaults.
-- Implement the adapter process-group supervisor with a shorter inner deadline,
-  private instruction file, direct log redirection, and one trial terminal
-  manifest in every outcome.
-- Select and record separate or shared verifier mode. Prefer separate; for
-  shared mode, prove all Agent processes have stopped before scoring.
-- Isolate HOME, configure one API-token Provider/model, and run one fresh CLI
-  Session per trial.
-- Capture raw JSONL, stderr, supervisor process state, Harbor result, and the
-  adapter manifest.
-- Map Harbor timeout, process signal, exit code, optional native
-  `run_settled`, and cleanup result into one normalized outcome.
-- Run a small benchmark smoke set that does not require background Bash. Do not
-  claim background execution is disabled until an enforceable tool policy
-  exists; process-group and environment cleanup remain the final boundaries.
-
-### Phase 1 — Reliable CLI Evaluation Boundary
-
-- Complete Phase 0 and Phase 1 work in
-  [`cli-headless-readiness.md`](cli-headless-readiness.md).
-- Add an Agent-owned Run deadline and budgets while retaining the explicitly
-  configured Harbor agent-phase timeout.
-- Stabilize and version the CLI terminal/event contract.
-- Add aggregate Run usage/cost including compaction.
-- Make signal handling, stdout backpressure, and child-process cleanup
-  deterministic.
-- Add end-to-end Harbor fixtures for success, failure, timeout, abort, large
-  output, and container teardown.
+- add Agent-owned Run deadlines and count/output budgets;
+- complete aggregate Run usage including compaction;
+- make event delivery, stdout backpressure, EPIPE, and shutdown bounds
+  deterministic;
+- enforce artifact size and redaction policies;
+- add end-to-end Harbor fixtures for success, Provider failure, tool failure,
+  length termination, timeout, abort, large output, hard kill, and teardown;
+- pin the Harbor runtime, LoopIQ build/image, Node runtime, task, verifier, and
+  model in the produced evaluation record.
 
 ### Phase 2 — Standardized Trajectories
 
-- Implement `ATIF-v1.7` conversion against the pinned Harbor version.
-- Add trace validation, checksums, artifact limits, and redaction profiles.
-- Produce and validate host `agent/trajectory.json`, register the adapter for
-  built-in trace export, then enable `SUPPORTS_ATIF` and trajectory tooling.
-- Add benchmark suites only after their environment, verifier, model, and
-  LoopIQ build are all pinned.
+Convert the stable LoopIQ-native stream to `ATIF-v1.7` inside the Harbor adapter,
+validate the generated `trajectory.json` against the pinned Harbor models, and
+only then set `SUPPORTS_ATIF = True`. Agent and CLI must not import ATIF types.
 
 ### Phase 3 — Server Transport Only If Required
 
-- Write the concrete remote/persistent execution use case.
-- Add bounded event replay, cursor/gap semantics, non-blocking subscribers, and
-  terminal delivery guarantees.
-- Define Server-side admission, cancellation, authentication, and worker
-  lifecycle.
-- Reuse the same versioned event and artifact semantics as the CLI adapter.
-
-## Phase 1 Acceptance Criteria
-
-The CLI-based Harbor path is ready for repeatable local evaluation when:
-
-- every trial starts from a clean Agent Home and a pinned LoopIQ build;
-- no interactive credential prompt is possible;
-- the Harbor job has a finite agent-phase timeout, the supervisor has a shorter
-  inner deadline, and normal Runs settle before either expires;
-- `environment.delete: true` is configured, cleanup errors are retained, and
-  no process remains after verified teardown;
-- every trial has exactly one adapter terminal manifest; a normally settled Run
-  has exactly one correlated native terminal, while a forced/startup-failure
-  path explicitly records a missing native terminal;
-- normally completed stdout contains parseable, versioned events with a
-  complete terminal record, while pre-Run and forced failures remain
-  reconstructable from the other evidence sources;
-- stderr is retained separately and cannot corrupt JSONL;
-- exit code, signal, timeout state, native terminal state, cleanup state, and
-  verifier result are all recorded independently;
-- separate/shared verifier ordering is explicit, and no Agent process can
-  mutate the workspace while scoring;
-- usage/cost is complete or explicitly marked partial/unknown;
-- artifact size and redaction policies are enforced;
-- success, Provider failure, tool failure, length termination, timeout, abort,
-  large output, hard kill, and stale-state isolation have end-to-end tests.
-
-## Known Initial Limitations
-
-- The first adapter is local/container installed-agent execution only.
-- It does not use the DevUI Server or SSE as its trace source.
-- It does not support interactive OAuth bootstrap.
-- It does not claim exact in-flight Run recovery.
-- It does not emit ATIF until the versioned conversion fixtures pass.
-- It relies on adapter process-group supervision plus explicitly configured
-  Harbor environment cleanup as the final safety boundary until LoopIQ owns all
-  background child processes and Run budgets.
+Use the existing Server only when a concrete evaluator requires a warm remote
+Agent, concurrent admission, managed status/cancellation, or durable reconnect.
+That path first requires bounded replay, cursors/gap semantics, non-blocking
+subscribers, and terminal delivery guarantees. It must reuse the same Agent and
+native event semantics rather than create an evaluation-specific runtime.

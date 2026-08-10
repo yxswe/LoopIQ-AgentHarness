@@ -328,6 +328,21 @@ persistence failure, and explicitly dynamic request-state behavior.
 
 ## 4. CLI & headless entrypoint
 
+**Status**: the Phase 0 command boundary is implemented. `loopiq run` supports
+argument/stdin input, fresh or explicitly resumed Sessions, model/thinking
+selection for new Sessions, text/JSON/versioned JSONL output, explicit exit
+codes, and executable end-to-end tests. `chat` supports sequential interaction
+and basic Session/model/thinking commands. The Harbor import-path adapter and
+process-group supervisor are implemented under `integrations/harbor`.
+
+Remaining work belongs to the runtime-hardening and event-delivery items below:
+Agent-owned deadlines/budgets, complete usage including compaction, bounded
+output/backpressure and EPIPE handling, background-process ownership,
+time-bounded signal escalation, immutable distribution artifacts, and full
+Harbor container fixtures. See
+[`features/cli-headless-readiness.md`](./features/cli-headless-readiness.md) and
+[`features/harbor-local-evaluation.md`](./features/harbor-local-evaluation.md).
+
 **Why**: The Agent needs consistent behavior across DevUI and headless use, with
 reliable scripting, automation, and CI behavior.
 

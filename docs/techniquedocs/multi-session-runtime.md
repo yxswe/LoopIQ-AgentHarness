@@ -363,10 +363,20 @@ bootstrap. It does not execute, steer, or abort work implicitly.
 ## CLI Contract
 
 The CLI invokes `Agent` directly and does not require a server. It exposes
-Session commands, provider list/add/remove, model listing, and Agent default
-configuration. Text, JSON, and JSONL modes keep authentication diagnostics off
-machine-readable stdout. Terminal secret prompts disable input echo. SIGINT
-calls `Agent.abort(sessionId, runId)` and waits for settlement.
+strict Session commands, local provider list/add/remove/validate operations,
+model listing/refresh, and Agent default configuration. `run` creates a fresh
+Session unless `--session` or `--continue` is explicit; creation-only
+Workspace/model/thinking flags are rejected for resumed Sessions. `chat`
+creates no Session until state or the first message requires one.
+
+Text, terminal JSON, and the versioned `loopiq.cli.event` JSONL protocol keep
+authentication diagnostics off machine-readable stdout. The CLI subscribes
+before starting a Run, buffers early events until it receives `RunHandle`, and
+emits one external `run_completed` record under normal process control. API
+tokens may be read from bounded stdin for non-interactive setup; terminal
+secret prompts disable input echo. SIGINT/SIGTERM abort an active Run and all
+post-construction paths attempt Agent shutdown. Process-group containment for
+Harbor belongs to `integrations/harbor`, not this Session runtime.
 
 ## Current Limitations
 

@@ -9,7 +9,7 @@
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"build": "tsgo -p tsconfig.json",
-		"test": "vitest --run --passWithNoTests"
+		"test": "npm run build && vitest --run --passWithNoTests"
 	},
 	"dependencies": {
 		"@loopiq/agent": "*"

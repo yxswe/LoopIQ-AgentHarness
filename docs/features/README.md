@@ -10,9 +10,9 @@ tests, and architecture documentation have been updated together.
 
 ## Active Notes
 
-- [`cli-headless-readiness.md`](cli-headless-readiness.md) — review of the CLI,
-  unattended execution, long-running tasks, machine-readable output, and the
-  work required before the CLI is a reliable evaluation boundary.
-- [`harbor-local-evaluation.md`](harbor-local-evaluation.md) — proposed Harbor
-  integration, trial ownership, adapter responsibilities, trace artifacts, and
-  phased acceptance criteria.
+- [`cli-headless-readiness.md`](cli-headless-readiness.md) — implemented CLI
+  contract, machine-output protocol, long-running task gaps, and verification
+  status.
+- [`harbor-local-evaluation.md`](harbor-local-evaluation.md) — implemented
+  import-path adapter/supervisor contract, trial lifecycle, artifacts, and
+  phased local-evaluation plan.
