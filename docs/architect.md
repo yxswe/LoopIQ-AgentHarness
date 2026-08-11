@@ -102,8 +102,9 @@ and runtime model switching are documented in
 - `model/model-runtime.ts` — owns the `@loopiq/ai` `Models` collection, provider
   registration, model lookup, switchable-model policy, credential state,
   same-Provider credential-mutation exclusion, explicit credential
-  add/validate/remove, OAuth refresh persistence, and a credential-bound online
-  validation cache.
+  add/validate/remove, OAuth refresh persistence, account-aware GitHub Copilot
+  model discovery and first-login validation-model selection, and a
+  credential-bound online validation cache.
 - `model/builtin-providers.ts` — the application-supported provider registry:
   GitHub Copilot, OpenAI Codex, OpenAI, Anthropic, Google, OpenRouter, DeepSeek,
   Moonshot AI CN, MiniMax CN, Z.AI Coding CN, and Kimi For Coding.
@@ -308,12 +309,15 @@ Session/model/thinking commands.
 
 Session, Provider, model, credential, and Agent-configuration commands map to
 Agent APIs. Provider listing is local by default; credential validation and
-model refresh are explicit network operations. API-token authentication can
-read a bounded secret from stdin for automation. Prompts and diagnostics use
-stderr so machine-readable stdout stays clean. `--version --format json`
-reports CLI/build and event-schema identity. The CLI has no direct `@loopiq/ai`
-dependency. `--workspace` selects the Workspace for a new Session; the CLI
-cannot select another Agent Home.
+model refresh are explicit network operations except that a provider-scoped
+GitHub Copilot model listing always refreshes account availability. On the
+first GitHub Copilot OAuth login, the CLI renders the Agent-provided model
+selection prompt; it does not implement model discovery or validation.
+API-token authentication can read a bounded secret from stdin for automation.
+Prompts and diagnostics use stderr so machine-readable stdout stays clean.
+`--version --format json` reports CLI/build and event-schema identity. The CLI
+has no direct `@loopiq/ai` dependency. `--workspace` selects the Workspace for
+a new Session; the CLI cannot select another Agent Home.
 
 The implemented contract and remaining long-run limitations are documented in
 [`features/cli-headless-readiness.md`](./features/cli-headless-readiness.md).

@@ -42,7 +42,7 @@ overrides with exit code `2`.
 | Interactive | `chat [initial prompt]` with `/help`, `/sessions`, `/new`, `/model`, `/thinking`, and `/exit` |
 | Session selection | `--session ID` selects one exact Session; `--continue` selects the most recently updated Session in the requested Workspace |
 | Session management | `sessions list/create/delete` |
-| Models and Providers | local `providers list`, explicit `providers validate`, `providers add/remove`, and `models list [PROVIDER] [--refresh]` |
+| Models and Providers | local `providers list`, explicit `providers validate`, `providers add/remove`, and `models list [PROVIDER] [--refresh]`; provider-scoped GitHub Copilot listing always refreshes account availability |
 | Non-interactive credential input | `providers add ID --token-stdin`; the token is read from stdin and is never placed in process arguments |
 | Configuration | `config get`, `set-model`, `set-thinking`, and `set-provider-request` |
 | Output | human text, one terminal JSON object, or a versioned JSONL event stream |
@@ -50,6 +50,13 @@ overrides with exit code `2`.
 Provider request-policy flags are accepted only by
 `config set-provider-request`. They are deliberately rejected by `run` and
 `chat` because the Agent has no Run-local request-policy contract.
+
+The first GitHub Copilot OAuth setup goes directly to the public device flow,
+then renders the Agent-provided intersection of account-available and locally
+known models. The terminal selection is kept open until an answer is received.
+Selection and validation failures leave both the previous credential and Agent
+default model unchanged. A later credential replacement does not prompt for a
+model again.
 
 ### Session Semantics
 
@@ -191,7 +198,8 @@ The CLI suite builds and spawns the real npm executable. It currently covers:
 - npm-bin/symlink startup, help, and machine-readable version output;
 - ordered JSONL start/terminal output for an accepted failed Run;
 - visible human-readable Run failures;
-- lazy chat Session creation.
+- lazy chat Session creation;
+- real child-process terminal selection lifetime.
 
 Still required are real signal timing tests, backpressure/EPIPE tests,
 high-output memory tests, complete success fixtures with a deterministic fake

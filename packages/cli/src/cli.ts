@@ -782,7 +782,7 @@ async function runChat(options: ParsedOptions): Promise<number> {
 	}
 }
 
-function createTerminalInteraction(token?: string, signal?: AbortSignal): ProviderLoginInteraction {
+export function createTerminalInteraction(token?: string, signal?: AbortSignal): ProviderLoginInteraction {
 	let tokenUsed = false;
 	return {
 		signal,
@@ -800,7 +800,7 @@ function createTerminalInteraction(token?: string, signal?: AbortSignal): Provid
 				if (prompt.type === "select") {
 					for (const option of prompt.options) stderr.write(`${option.id}: ${option.label}\n`);
 				}
-				return readline.question(`${prompt.message} `, { signal: prompt.signal });
+				return await readline.question(`${prompt.message} `, { signal: prompt.signal });
 			} finally {
 				readline.close();
 			}

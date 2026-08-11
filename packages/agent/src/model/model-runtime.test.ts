@@ -1,9 +1,193 @@
-import { InMemoryCredentialStore } from "@loopiq/ai";
+import { fauxProvider, InMemoryCredentialStore, type Provider } from "@loopiq/ai";
 import { describe, expect, it } from "vitest";
 import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtin-providers.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 
+function createCopilotFixture(options?: { availableModelIds?: string[]; refreshError?: Error }) {
+	const credentials = new InMemoryCredentialStore();
+	const faux = fauxProvider({
+		provider: "github-copilot",
+		models: [
+			{ id: "model-a", name: "Model A" },
+			{ id: "model-b", name: "Model B" },
+		],
+	});
+	const availableModelIds = options?.availableModelIds ?? ["model-b", "remote-only"];
+	let refreshes = 0;
+	const provider: Provider = {
+		...faux.provider,
+		auth: {
+			oauth: {
+				name: "GitHub Copilot",
+				async login(callbacks) {
+					const enterprise = await callbacks.prompt({
+						type: "text",
+						message: "GitHub Enterprise URL/domain (blank for github.com)",
+					});
+					if (enterprise !== "") throw new Error("Expected github.com login");
+					return {
+						type: "oauth",
+						access: "candidate-access",
+						refresh: "github-access",
+						expires: Date.now() + 60_000,
+						availableModelIds,
+					};
+				},
+				async refresh(credential) {
+					refreshes++;
+					if (options?.refreshError) throw options.refreshError;
+					return { ...credential, access: `refreshed-${refreshes}`, availableModelIds };
+				},
+				async toAuth(credential) {
+					return { apiKey: credential.access };
+				},
+			},
+		},
+	};
+	return {
+		credentials,
+		registration: {
+			id: "github-copilot",
+			authMethods: ["oauth"] as const,
+			create: () => provider,
+		},
+		getRefreshes: () => refreshes,
+	};
+}
+
 describe("ModelRuntime", () => {
+	it("uses github.com directly and validates a first Copilot login with an account-available local model", async () => {
+		const fixture = createCopilotFixture();
+		let validatedModelId: string | undefined;
+		const prompts: string[] = [];
+		const runtime = new ModelRuntime({
+			credentials: fixture.credentials,
+			registrations: [fixture.registration],
+			validator: async (_registration, credential, _signal, modelId) => {
+				validatedModelId = modelId;
+				return { state: "valid" as const, credential };
+			},
+		});
+
+		const status = await runtime.addProviderCredential("github-copilot", {
+			method: "oauth",
+			interaction: {
+				async prompt(prompt) {
+					prompts.push(prompt.type);
+					if (prompt.type !== "select") throw new Error("Unexpected prompt");
+					expect(prompt.options.map((option) => option.id)).toEqual(["model-b"]);
+					return "model-b";
+				},
+				notify: () => {},
+			},
+		});
+
+		expect(status.credentialState).toBe("valid");
+		expect(prompts).toEqual(["select"]);
+		expect(validatedModelId).toBe("model-b");
+		expect(await fixture.credentials.read("github-copilot")).toMatchObject({ access: "candidate-access" });
+	});
+
+	it("rejects an unavailable Copilot model selection without persisting the candidate", async () => {
+		const fixture = createCopilotFixture();
+		const runtime = new ModelRuntime({
+			credentials: fixture.credentials,
+			registrations: [fixture.registration],
+			validator: async (_registration, credential) => ({ state: "valid" as const, credential }),
+		});
+
+		await expect(
+			runtime.addProviderCredential("github-copilot", {
+				method: "oauth",
+				interaction: { prompt: async () => "model-a", notify: () => {} },
+			}),
+		).rejects.toMatchObject({ code: "provider_credential_setup_failed" });
+		expect(await fixture.credentials.read("github-copilot")).toBeUndefined();
+	});
+
+	it("rejects a Copilot login with no account-available local models", async () => {
+		const fixture = createCopilotFixture({ availableModelIds: ["remote-only"] });
+		const runtime = new ModelRuntime({
+			credentials: fixture.credentials,
+			registrations: [fixture.registration],
+			validator: async (_registration, credential) => ({ state: "valid" as const, credential }),
+		});
+
+		await expect(
+			runtime.addProviderCredential("github-copilot", {
+				method: "oauth",
+				interaction: { prompt: async () => "model-a", notify: () => {} },
+			}),
+		).rejects.toMatchObject({ code: "provider_credential_setup_failed" });
+		expect(await fixture.credentials.read("github-copilot")).toBeUndefined();
+	});
+
+	it("does not repeat Copilot model selection when replacing a credential", async () => {
+		const fixture = createCopilotFixture();
+		await fixture.credentials.modify("github-copilot", async () => ({
+			type: "oauth",
+			access: "old-access",
+			refresh: "old-refresh",
+			expires: Date.now() + 60_000,
+			availableModelIds: ["model-a"],
+		}));
+		let validatedModelId: string | undefined;
+		const runtime = new ModelRuntime({
+			credentials: fixture.credentials,
+			registrations: [fixture.registration],
+			validator: async (_registration, credential, _signal, modelId) => {
+				validatedModelId = modelId;
+				return { state: "valid" as const, credential };
+			},
+		});
+
+		await runtime.addProviderCredential("github-copilot", {
+			method: "oauth",
+			interaction: { prompt: async () => Promise.reject(new Error("Unexpected visible prompt")), notify: () => {} },
+		});
+
+		expect(validatedModelId).toBe("model-b");
+		expect(await fixture.credentials.read("github-copilot")).toMatchObject({ access: "candidate-access" });
+	});
+
+	it("refreshes Copilot models on every listing and intersects account availability with the local catalog", async () => {
+		const fixture = createCopilotFixture();
+		await fixture.credentials.modify("github-copilot", async () => ({
+			type: "oauth",
+			access: "old-access",
+			refresh: "github-access",
+			expires: Date.now() - 1,
+			availableModelIds: ["model-a"],
+		}));
+		const runtime = new ModelRuntime({ credentials: fixture.credentials, registrations: [fixture.registration] });
+
+		expect((await runtime.listModels("github-copilot")).map((model) => model.modelId)).toEqual(["model-b"]);
+		expect((await runtime.listModels("github-copilot", { refresh: true })).map((model) => model.modelId)).toEqual([
+			"model-b",
+		]);
+		expect(fixture.getRefreshes()).toBe(2);
+		expect(await fixture.credentials.read("github-copilot")).toMatchObject({
+			access: "refreshed-2",
+			availableModelIds: ["model-b", "remote-only"],
+		});
+	});
+
+	it("reports Copilot model discovery failures without falling back to the static catalog", async () => {
+		const fixture = createCopilotFixture({ refreshError: new Error("catalog unavailable") });
+		await fixture.credentials.modify("github-copilot", async () => ({
+			type: "oauth",
+			access: "old-access",
+			refresh: "github-access",
+			expires: Date.now() + 60_000,
+			availableModelIds: ["model-a"],
+		}));
+		const runtime = new ModelRuntime({ credentials: fixture.credentials, registrations: [fixture.registration] });
+
+		await expect(runtime.listModels("github-copilot")).rejects.toMatchObject({
+			code: "provider_validation_unavailable",
+		});
+	});
+
 	it("validates before persisting and removes only the credential", async () => {
 		const credentials = new InMemoryCredentialStore();
 		const openai = BUILTIN_PROVIDER_REGISTRATIONS.find((provider) => provider.id === "openai")!;

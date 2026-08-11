@@ -2,6 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { CliUsageError, parseArgs } from "./cli.ts";
@@ -10,12 +11,13 @@ const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(import.meta.dirname, "../../..");
 const executable = resolve(repositoryRoot, "node_modules/.bin/loopiq");
 
-function runExecutable(
+function runChild(
+	command: string,
 	args: string[],
 	options?: { input?: string; inputAfter?: { marker: string; text: string }; env?: NodeJS.ProcessEnv },
 ) {
 	return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolvePromise, reject) => {
-		const child = spawn(executable, args, {
+		const child = spawn(command, args, {
 			cwd: repositoryRoot,
 			env: { ...process.env, ...options?.env },
 			stdio: "pipe",
@@ -37,6 +39,13 @@ function runExecutable(
 		child.on("close", (code) => resolvePromise({ code, stdout, stderr }));
 		if (!options?.inputAfter) child.stdin.end(options?.input);
 	});
+}
+
+function runExecutable(
+	args: string[],
+	options?: { input?: string; inputAfter?: { marker: string; text: string }; env?: NodeJS.ProcessEnv },
+) {
+	return runChild(executable, args, options);
 }
 
 describe("CLI argument parsing", () => {
@@ -124,6 +133,27 @@ describe("CLI argument parsing", () => {
 });
 
 describe("CLI executable", () => {
+	it("keeps a terminal selection prompt open until the child process receives an answer", async () => {
+		const moduleUrl = pathToFileURL(resolve(repositoryRoot, "packages/cli/dist/cli.js")).href;
+		const script = `
+			import { createTerminalInteraction } from ${JSON.stringify(moduleUrl)};
+			const interaction = createTerminalInteraction();
+			const answer = await interaction.prompt({
+				type: "select",
+				message: "Select a model",
+				options: [{ id: "model-b", label: "Model B" }],
+			});
+			process.stdout.write(answer);
+		`;
+		const result = await runChild(process.execPath, ["--input-type=module", "--eval", script], {
+			inputAfter: { marker: "Select a model", text: "model-b\n" },
+		});
+
+		expect(result.code).toBe(0);
+		expect(result.stdout).toBe("model-b");
+		expect(result.stderr).toContain("model-b: Model B");
+	});
+
 	it("runs through the npm bin symlink and exposes help", async () => {
 		const result = await execFileAsync(executable, ["--help"], { cwd: repositoryRoot });
 		expect(result.stdout).toContain("LoopIQ Agent CLI");

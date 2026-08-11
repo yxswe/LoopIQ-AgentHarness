@@ -270,6 +270,17 @@ before the existing durable credential is replaced, so an invalid replacement
 cannot destroy a working credential. Cancellation spans both provider login and
 the validation request; an aborted candidate is never persisted.
 
+GitHub Copilot OAuth is adapted to the public `github.com` device flow: the
+Agent answers the dependency's optional Enterprise-domain prompt with an empty
+value, so adapters immediately receive the device-code event. On the first
+login, the returned account `availableModelIds` are intersected with the local
+catalog and exposed as a `select` prompt. The selected local model is used for
+the minimal credential-validation request. An empty intersection or a response
+outside the offered set fails without persisting the candidate. Replacing an
+existing GitHub Copilot credential uses the first available local model for
+validation and does not repeat the selection. This selection is validation
+input only and does not change the Agent default model.
+
 ### D6. No automatic interactive login
 
 The Agent never turns a normal command into an interactive login. This keeps
@@ -493,8 +504,14 @@ provider. UI switchers must display only entries whose resulting status is
 client cannot bypass it.
 
 Model listing uses the last known local catalog by default. An explicit refresh
-option may perform network discovery for a dynamic provider. Listing models
-must not start interactive login.
+option may perform network discovery for a dynamic provider. GitHub Copilot is
+the account-scoped exception: `listModels("github-copilot")` requires a
+persisted OAuth credential, refreshes it through the Provider OAuth
+implementation on every call, persists any rotated token and returned
+`availableModelIds`, and returns only the intersection with the local catalog.
+Discovery errors are reported instead of falling back to the static catalog;
+`refresh: true` is therefore redundant for this Provider. Listing models never
+starts interactive login.
 
 `getProviderStatus()` returns the current in-memory validation result when it is
 still fresh; otherwise it reports only local credential presence as `unchecked`
@@ -695,7 +712,9 @@ agent.addProviderCredential("github-copilot", {
   -> provider emits device-code/login events
   -> adapter renders or transports those events
   -> provider returns a candidate credential
-  -> Agent validates the candidate online
+  -> Agent intersects account availability with its local model catalog
+  -> adapter renders the Agent-owned model selection prompt
+  -> Agent validates the candidate with the selected model
   -> Agent saves it under the provider id only after validation succeeds
   -> credential addition completes
 
@@ -733,6 +752,7 @@ agent.addProviderCredential(providerId, method, interaction)
   -> verify provider and method are registered
   -> complete API-token prompt or OAuth flow
   -> stage the candidate credential outside the durable store
+  -> for a first GitHub Copilot OAuth login, select one account-available local model
   -> run the provider-specific authenticated validation strategy
   -> validation failed: preserve the previous credential, return an error
   -> validation succeeded: atomically replace credentials.json entry
@@ -803,6 +823,19 @@ agent.run(sessionId, input)
 There is no authentication preflight. Missing authentication is ordinary Run
 execution failure, so adapters receive the same handle, events, persisted error
 message, and settlement lifecycle as other Provider failures.
+
+### List account-available GitHub Copilot models
+
+```text
+agent.listModels("github-copilot")
+  -> require a persisted GitHub Copilot OAuth credential
+  -> refresh through the Provider OAuth implementation under the credential lock
+  -> the Provider requests its current /models catalog
+  -> persist the refreshed credential and availableModelIds
+  -> intersect those IDs with the Agent's local GitHub Copilot catalog
+  -> return only the intersection
+  -> any refresh/catalog error fails the command without a static fallback
+```
 
 ### Expired OAuth access token
 
@@ -941,6 +974,10 @@ Future changes to this behavior must update
 - all eleven agreed providers are registered without credentials;
 - only a provider with a persisted, valid credential is switchable;
 - candidate credentials are validated before first persistence;
+- GitHub Copilot uses the public device flow without an Enterprise-domain prompt;
+- first GitHub Copilot OAuth login selects from the account/local model intersection;
+- empty or invalid GitHub Copilot selections do not persist the candidate;
+- GitHub Copilot credential replacement does not repeat model selection;
 - invalid replacement credentials preserve the previous credential;
 - invalid, unavailable, and unchecked validation states remain distinct;
 - validation results expire and are refreshed before a later switch;
@@ -979,6 +1016,9 @@ Future changes to this behavior must update
 - switching models within a provider verifies catalog ownership;
 - an unknown persisted provider/model fails instead of falling back;
 - a model-dependent command works immediately after another process logs in.
+- GitHub Copilot model listing refreshes account availability on every call;
+- GitHub Copilot listing returns only locally known account-available models;
+- GitHub Copilot discovery failure does not fall back to the static catalog.
 
 ### Adapter boundaries
 
