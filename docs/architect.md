@@ -310,9 +310,11 @@ provides sequential interaction, delayed Session creation, and explicit
 Session/model/thinking commands.
 
 Session, Provider, model, credential, and Agent-configuration commands map to
-Agent APIs. Provider listing is local by default; credential validation and
-model refresh are explicit network operations except that a provider-scoped
-GitHub Copilot model listing always refreshes account availability. On the
+Agent APIs. Provider listing is local by default. An unscoped model listing
+includes only Providers with persisted credentials; an explicitly scoped model
+listing can inspect any registered Provider. Credential validation and model
+refresh are explicit network operations except that every included GitHub
+Copilot listing always refreshes account availability. On the
 first GitHub Copilot OAuth login, the CLI renders the Agent-provided model
 selection prompt; it does not implement model discovery or validation.
 API-token authentication can read a bounded secret from stdin for automation.

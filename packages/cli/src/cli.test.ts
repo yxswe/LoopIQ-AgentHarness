@@ -169,6 +169,18 @@ describe("CLI executable", () => {
 		});
 	});
 
+	it("reports an empty configured-Provider model list explicitly", async () => {
+		const home = await mkdtemp(resolve(tmpdir(), "loopiq-cli-test-"));
+		try {
+			const result = await runExecutable(["models", "list"], { env: { HOME: home } });
+			expect(result.code).toBe(0);
+			expect(result.stdout).toBe("No configured Provider models.\n");
+			expect(result.stderr).toBe("");
+		} finally {
+			await rm(home, { recursive: true, force: true });
+		}
+	});
+
 	it("emits an ordered machine terminal for an accepted failed Run", async () => {
 		const home = await mkdtemp(resolve(tmpdir(), "loopiq-cli-test-"));
 		try {

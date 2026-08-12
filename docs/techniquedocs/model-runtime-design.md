@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last reviewed: 2026-07-28
+Last reviewed: 2026-08-12
 
 This document defines the implemented ownership and persistence boundaries between
 the Agent, LLM providers, credentials, Sessions, the Server, and the CLI. It is
@@ -503,15 +503,20 @@ provider. UI switchers must display only entries whose resulting status is
 `valid`; the Agent enforces the same rule when `updateSession()` is called, so a
 client cannot bypass it.
 
-Model listing uses the last known local catalog by default. An explicit refresh
-option may perform network discovery for a dynamic provider. GitHub Copilot is
-the account-scoped exception: `listModels("github-copilot")` requires a
-persisted OAuth credential, refreshes it through the Provider OAuth
-implementation on every call, persists any rotated token and returned
+An unscoped `listModels()` reads local credential presence and includes only
+Providers represented in `credentials.json`; missing Providers are not exposed
+as locally configured choices. A scoped `listModels(providerId)` remains an
+explicit catalog-inspection operation and may inspect any registered Provider.
+An explicit refresh option may perform network discovery for each included
+dynamic Provider.
+
+GitHub Copilot is the account-scoped exception in either form: whenever it is
+included, listing requires its persisted OAuth credential, refreshes it through
+the Provider OAuth implementation, persists any rotated token and returned
 `availableModelIds`, and returns only the intersection with the local catalog.
 Discovery errors are reported instead of falling back to the static catalog;
 `refresh: true` is therefore redundant for this Provider. Listing models never
-starts interactive login.
+starts interactive login or validates unrelated Provider credentials.
 
 `getProviderStatus()` returns the current in-memory validation result when it is
 still fresh; otherwise it reports only local credential presence as `unchecked`
@@ -837,6 +842,17 @@ agent.listModels("github-copilot")
   -> any refresh/catalog error fails the command without a static fallback
 ```
 
+### List models for locally configured Providers
+
+```text
+agent.listModels()
+  -> inspect credential presence for every registered Provider
+  -> skip Providers missing from credentials.json
+  -> use each included Provider's local catalog by default
+  -> refresh GitHub Copilot account availability when it is included
+  -> return one combined serializable model list
+```
+
 ### Expired OAuth access token
 
 ```text
@@ -1021,6 +1037,8 @@ Future changes to this behavior must update
 - GitHub Copilot model listing refreshes account availability on every call;
 - GitHub Copilot listing returns only locally known account-available models;
 - GitHub Copilot discovery failure does not fall back to the static catalog.
+- unscoped model listing includes only Providers with persisted credentials;
+- scoped model listing can inspect a registered Provider before credentials are supplied.
 
 ### Adapter boundaries
 

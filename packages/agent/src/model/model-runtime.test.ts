@@ -161,15 +161,35 @@ describe("ModelRuntime", () => {
 		}));
 		const runtime = new ModelRuntime({ credentials: fixture.credentials, registrations: [fixture.registration] });
 
+		expect((await runtime.listModels()).map((model) => model.modelId)).toEqual(["model-b"]);
 		expect((await runtime.listModels("github-copilot")).map((model) => model.modelId)).toEqual(["model-b"]);
 		expect((await runtime.listModels("github-copilot", { refresh: true })).map((model) => model.modelId)).toEqual([
 			"model-b",
 		]);
-		expect(fixture.getRefreshes()).toBe(2);
+		expect(fixture.getRefreshes()).toBe(3);
 		expect(await fixture.credentials.read("github-copilot")).toMatchObject({
-			access: "refreshed-2",
+			access: "refreshed-3",
 			availableModelIds: ["model-b", "remote-only"],
 		});
+	});
+
+	it("lists only credential-backed providers when no provider is specified", async () => {
+		const credentials = new InMemoryCredentialStore();
+		const configured = fauxProvider({ provider: "configured-provider" });
+		const missing = fauxProvider({ provider: "missing-provider" });
+		await credentials.modify("configured-provider", async () => ({ type: "api_key", key: "configured" }));
+		const runtime = new ModelRuntime({
+			credentials,
+			registrations: [
+				{ id: "configured-provider", authMethods: ["api_token"], create: () => configured.provider },
+				{ id: "missing-provider", authMethods: ["api_token"], create: () => missing.provider },
+			],
+		});
+
+		expect((await runtime.listModels()).map((model) => model.providerId)).toEqual(["configured-provider"]);
+		expect((await runtime.listModels("missing-provider")).map((model) => model.providerId)).toEqual([
+			"missing-provider",
+		]);
 	});
 
 	it("reports Copilot model discovery failures without falling back to the static catalog", async () => {

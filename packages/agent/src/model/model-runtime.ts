@@ -103,12 +103,24 @@ export class ModelRuntime {
 	}
 
 	async listModels(providerId?: string, options?: ListModelsOptions): Promise<ModelSummary[]> {
-		if (providerId) this.requireRegistration(providerId);
-		let models: readonly Model<any>[];
-		if (providerId === "github-copilot") models = await this.refreshGitHubCopilotModels();
-		else {
-			if (options?.refresh) await this.mutableModels.refresh(providerId);
-			models = this.mutableModels.getModels(providerId);
+		const providerIds: string[] = [];
+		if (providerId) {
+			this.requireRegistration(providerId);
+			providerIds.push(providerId);
+		} else {
+			for (const registeredProviderId of this.registrations.keys()) {
+				if (await this.credentials.read(registeredProviderId)) providerIds.push(registeredProviderId);
+			}
+		}
+
+		const models: Model<any>[] = [];
+		for (const configuredProviderId of providerIds) {
+			if (configuredProviderId === "github-copilot") {
+				models.push(...(await this.refreshGitHubCopilotModels()));
+			} else {
+				if (options?.refresh) await this.mutableModels.refresh(configuredProviderId);
+				models.push(...this.mutableModels.getModels(configuredProviderId));
+			}
 		}
 		return models.map((model) => ({
 			providerId: model.provider,

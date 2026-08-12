@@ -898,6 +898,7 @@ function formatProviders(providers: ProviderSummary[]): string {
 }
 
 function formatModels(models: ModelSummary[]): string {
+	if (models.length === 0) return "No configured Provider models.";
 	return renderTable(
 		["MODEL", "CONTEXT", "MAX OUTPUT", "REASONING"],
 		models.map((model) => [

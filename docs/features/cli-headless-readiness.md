@@ -2,7 +2,7 @@
 
 **Status:** Phase 0 CLI boundary implemented; runtime hardening remains
 
-**Reviewed:** 2026-08-10
+**Reviewed:** 2026-08-12
 
 **Applies to:** `packages/cli` and the Agent paths exercised by the CLI
 
@@ -42,7 +42,7 @@ overrides with exit code `2`.
 | Interactive | `chat [initial prompt]` with `/help`, `/sessions`, `/new`, `/model`, `/thinking`, and `/exit` |
 | Session selection | `--session ID` selects one exact Session; `--continue` selects the most recently updated Session in the requested Workspace |
 | Session management | `sessions list/create/delete` |
-| Models and Providers | local `providers list`, explicit `providers validate`, `providers add/remove`, and `models list [PROVIDER] [--refresh]`; provider-scoped GitHub Copilot listing always refreshes account availability |
+| Models and Providers | local `providers list`, explicit `providers validate`, `providers add/remove`, and `models list [PROVIDER] [--refresh]`; unscoped listing includes only credential-backed Providers, while every included GitHub Copilot listing refreshes account availability |
 | Non-interactive credential input | `providers add ID --token-stdin`; the token is read from stdin and is never placed in process arguments |
 | Configuration | `config get`, `set-model`, `set-thinking`, and `set-provider-request` |
 | Output | human text, one terminal JSON object, or a versioned JSONL event stream |
