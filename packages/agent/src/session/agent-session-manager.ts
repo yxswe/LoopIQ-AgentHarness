@@ -24,7 +24,7 @@ import { acquireSessionStoreLease, type SessionStoreLease } from "./storage/sess
 /** Manages loaded AgentSession instances and their Node-specific durable resources. */
 export class AgentSessionManager {
 	private readonly engine: AgentEngine;
-	private readonly getSessionDefaults: () => { model: ModelReference; thinkingLevel: ThinkingLevel };
+	private readonly getSessionDefaults: () => { model?: ModelReference; thinkingLevel: ThinkingLevel };
 	private readonly resolveSwitchableModel: (reference: ModelReference) => Promise<Model<any>>;
 	private readonly loaded = new Map<string, { session: AgentSession; lease: SessionStoreLease }>();
 	private readonly opening = new Map<string, Promise<AgentSession>>();
@@ -34,7 +34,7 @@ export class AgentSessionManager {
 	constructor(
 		agentHome: string,
 		engine: AgentEngine,
-		getSessionDefaults: () => { model: ModelReference; thinkingLevel: ThinkingLevel },
+		getSessionDefaults: () => { model?: ModelReference; thinkingLevel: ThinkingLevel },
 		resolveSwitchableModel: (reference: ModelReference) => Promise<Model<any>>,
 	) {
 		this.engine = engine;

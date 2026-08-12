@@ -647,16 +647,16 @@ function chatHelp(): string {
 async function writeChatBanner(agent: Agent, options: ParsedOptions, session?: SessionSnapshot): Promise<void> {
 	const configuration = await agent.getConfiguration();
 	const model = session?.model ?? configuration.defaultModel;
-	const status = await agent.getProviderStatus(model.providerId);
+	const status = model ? await agent.getProviderStatus(model.providerId) : undefined;
 	stderr.write(
 		[
 			`LoopIQ ${PACKAGE.version}`,
 			`Workspace: ${session?.workspaceDir ?? options.workspaceDir}`,
 			`Session: ${session?.id ?? "new on first message"}`,
-			`Model: ${model.providerId}/${model.modelId}`,
+			`Model: ${model ? `${model.providerId}/${model.modelId}` : "not configured"}`,
 			`Thinking: ${session?.thinkingLevel ?? configuration.defaultThinkingLevel}`,
-			`Credential: ${status.credentialState}`,
-			status.credentialState === "missing"
+			status ? `Credential: ${status.credentialState}` : "Configure with: loopiq config set-model PROVIDER/MODEL",
+			model && status?.credentialState === "missing"
 				? `Authenticate with: loopiq providers add ${model.providerId}`
 				: undefined,
 			"Type /help for commands.",

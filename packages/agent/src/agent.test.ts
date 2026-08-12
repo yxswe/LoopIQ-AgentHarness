@@ -96,7 +96,7 @@ async function createFixture(credentials: CredentialStore = new InMemoryCredenti
 }
 
 describe("Agent", () => {
-	it("initializes the supported providers and persists the application default", async () => {
+	it("initializes provider management without a default model", async () => {
 		const agentHome = await mkdtemp(join(tmpdir(), "loopiq-agent-default-"));
 		agentHomes.push(agentHome);
 		const first = await createAgentForTesting({ agentHome });
@@ -115,9 +115,11 @@ describe("Agent", () => {
 			"kimi-coding",
 		]);
 		expect(await first.getConfiguration()).toEqual({
-			defaultModel: { providerId: "github-copilot", modelId: "claude-opus-4.6" },
 			defaultThinkingLevel: "high",
 			providerRequest: DEFAULT_PROVIDER_REQUEST_POLICY,
+		});
+		await expect(first.createSession({ workspaceDir: process.cwd() })).rejects.toMatchObject({
+			code: "model_not_configured",
 		});
 		await first.updateConfiguration({
 			defaultModel: { providerId: "openai", modelId: "gpt-4.1-mini" },

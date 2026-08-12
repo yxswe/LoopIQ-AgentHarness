@@ -12,7 +12,6 @@ import { ModelRuntime } from "./model/model-runtime.ts";
 import { AgentSessionManager } from "./session/agent-session-manager.ts";
 
 const COMPILED_DEFAULT_CONFIGURATION: AgentConfiguration = {
-	defaultModel: { providerId: "github-copilot", modelId: "claude-opus-4.6" },
 	defaultThinkingLevel: "high",
 	providerRequest: DEFAULT_PROVIDER_REQUEST_POLICY,
 };
@@ -38,11 +37,11 @@ async function createAgentInHome(options: AgentConstructionOptions): Promise<Age
 	const settingsStore = new FileAgentSettingsStore(options.agentHome);
 
 	// `configuration` is the validated in-memory snapshot loaded from agent.json. It
-	// currently contains exactly three Agent-wide choices: a default model reference
-	// such as `github-copilot/claude-opus-4.6`, the default thinking level (`high`),
+	// contains an optional default model reference, the default thinking level (`high`),
 	// and the safe Provider request policy (transport, timeout, retry limits, and
-	// cache retention). On first launch, loadOrCreate persists the production defaults
-	// or the injected test model; later launches reuse the existing file. This
+	// cache retention). On first launch, loadOrCreate persists the production policy
+	// defaults without inventing a model, or the injected test model; later launches
+	// reuse the existing file. This
 	// initialization performs no login, credential validation, catalog refresh, or
 	// other network operation.
 	const configuration = await settingsStore.loadOrCreate(
@@ -68,11 +67,6 @@ async function createAgentInHome(options: AgentConstructionOptions): Promise<Age
 		"modelRuntime" in options
 			? options.modelRuntime
 			: new ModelRuntime({ credentials: new FileCredentialStore(options.agentHome) });
-
-	// Ensure only that the configured reference exists in the already registered
-	// local catalog. Passing `false` deliberately prevents an online catalog refresh,
-	// so Agent construction remains local and does not require authentication.
-	if (!("modelRuntime" in options)) await modelRuntime.resolveModel(configuration.defaultModel, false);
 
 	// AgentSettings is the sole owner of the live Agent configuration. It returns
 	// defensive snapshots, validates configuration updates, persists before exposing

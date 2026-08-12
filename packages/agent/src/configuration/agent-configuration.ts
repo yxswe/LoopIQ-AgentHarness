@@ -1,7 +1,7 @@
 import type { ModelReference, ProviderRequestPolicy, ThinkingLevel } from "../base/options.ts";
 
 export interface AgentConfiguration {
-	defaultModel: ModelReference;
+	defaultModel?: ModelReference;
 	defaultThinkingLevel: ThinkingLevel;
 	providerRequest: ProviderRequestPolicy;
 }

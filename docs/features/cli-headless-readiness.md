@@ -61,6 +61,7 @@ model again.
 ### Session Semantics
 
 - `run` creates a new Session unless `--session` or `--continue` is supplied.
+- Without a configured default model, a new Session requires `--model`.
 - `chat` delays new Session creation until the first message or a command that
   needs Session state. Entering `/exit` immediately leaves no empty Session.
 - `--workspace`, `--model`, and `--thinking` configure a new Session.

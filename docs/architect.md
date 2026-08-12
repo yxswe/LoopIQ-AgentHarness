@@ -131,9 +131,11 @@ credential validation, token refresh, or other network request. Tests may use
 an internal construction helper with a temporary Agent Home; this override is
 not part of the adapter-facing API.
 
-`agent.json` stores the Agent-wide default model, default thinking level, and
-safe Provider request policy (`transport`, timeout, Provider retry count and
-delay cap, and cache retention). The compiled defaults use thinking level
+`agent.json` optionally stores the Agent-wide default model and always stores
+the default thinking level and safe Provider request policy (`transport`,
+timeout, Provider retry count and delay cap, and cache retention). Agent
+construction does not require a default model; a new Session must supply one
+explicitly when none is configured. The compiled defaults use thinking level
 `high`, transport `auto`, a five-minute timeout, zero Provider retries, a
 one-minute retry-delay cap, and short cache retention. Arbitrary request headers
 and metadata are not part of the Agent configuration or runtime API.

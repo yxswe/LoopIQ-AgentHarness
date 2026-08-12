@@ -29,7 +29,7 @@ type AgentSessionLoadOptions = {
 	env: ExecutionEnv;
 	store: JsonlSessionStore;
 	engine: AgentEngine;
-	defaults: { model: ModelReference; thinkingLevel: ThinkingLevel };
+	defaults: { model?: ModelReference; thinkingLevel: ThinkingLevel };
 	newSession?: { model?: ModelReference; thinkingLevel?: ThinkingLevel };
 };
 
@@ -86,6 +86,12 @@ export class AgentSession {
 		const persisted = options.newSession ? undefined : restored.configuration;
 		const tools = createDefaultTools(options.env);
 		const modelReference = options.newSession?.model ?? persisted?.model ?? options.defaults.model;
+		if (!modelReference) {
+			throw new AgentRuntimeError(
+				"model_not_configured",
+				"No model was specified and the Agent has no default model; specify a Session model or configure an Agent default",
+			);
+		}
 		const model = options.engine.resolveModel(modelReference);
 		const config: SessionConfiguration = persisted ?? {
 			model: { providerId: model.provider, modelId: model.id },

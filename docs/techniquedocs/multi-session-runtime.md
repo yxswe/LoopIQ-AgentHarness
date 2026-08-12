@@ -290,10 +290,11 @@ explicit `session_config` entries.
 Resume scans physical entry order and uses the latest valid snapshot. Runtime
 configuration entries are excluded from model context.
 
-The global default model, default thinking level, and safe Provider request
+The optional global default model, default thinking level, and safe Provider request
 policy live in `agent.json`. The model may reference a registered Provider
 without a credential. Default model and thinking level affect only new Sessions;
-existing Sessions retain their persisted values. Provider request policy is
+existing Sessions retain their persisted values. A new Session requires an
+explicit model when no default is configured. Provider request policy is
 read for every turn snapshot and therefore affects all Sessions on their next
 Provider request without changing an in-flight request. Headers and metadata
 are not part of the Agent runtime configuration API.

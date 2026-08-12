@@ -197,7 +197,6 @@ createAgent()
   -> construct the credential store
   -> construct Models
   -> register built-in providers
-  -> validate the locally known default model
   -> construct AgentSettings, AgentEngine, and AgentSessionManager
   -> return thin Agent facade
 ```
@@ -368,7 +367,7 @@ Ownership is:
 | Data | Owner | Persistence |
 | --- | --- | --- |
 | Supported provider implementations | `ModelRuntime` | Application code |
-| Global default model | Agent settings | `agent.json` |
+| Optional global default model | Agent settings | `agent.json` |
 | Global default thinking level | Agent settings | `agent.json` |
 | Safe Provider request policy | Agent settings | `agent.json` |
 | Provider credentials | Credential store | `credentials.json` |
@@ -379,7 +378,8 @@ Ownership is:
 | Dynamic provider/model objects | `ModelRuntime` | Memory only |
 | Login prompts and pending responses | Adapter | Memory only |
 
-`agent.json` contains one current shape with no version suffix:
+`agent.json` contains one current shape with no version suffix. The
+`defaultModel` member appears only after it is configured:
 
 ```json
 {
@@ -417,11 +417,11 @@ For a new Session, model selection precedence is:
 ```text
 explicit CreateSessionOptions.model
   > persisted Agent defaultModel
-  > compiled application default
 ```
 
-On first startup, the compiled application default is written to `agent.json`
-so subsequent starts have one explicit global setting.
+The Agent may start without a default model. Creating a new Session without an
+explicit model then fails with `model_not_configured`; Provider management and
+existing Sessions remain available.
 
 `defaultModel` is one atomic provider/model pair. It represents both the
 default provider and that provider's corresponding default model; separate
@@ -580,12 +580,12 @@ that process's configuration snapshot. `updateConfiguration()` delegates to
 `AgentSettings`, which updates both the in-memory snapshot and `agent.json`
 through an atomic, cross-process-safe write.
 
-The snapshot contains the default model, default thinking level, and safe
-Provider request policy. The compiled thinking default is `high`. Default model
-and thinking changes affect only new Sessions; existing Sessions retain their
-JSONL-persisted values. Request policy is process-wide and each turn snapshot
-reads its current value, so an update affects the next Provider request without
-mutating one already in flight.
+The snapshot contains the optional default model, default thinking level, and
+safe Provider request policy. The compiled thinking default is `high`. Default
+model and thinking changes affect only new Sessions; existing Sessions retain
+their JSONL-persisted values. Request policy is process-wide and each turn
+snapshot reads its current value, so an update affects the next Provider request
+without mutating one already in flight.
 
 The request policy contains transport, a positive timeout, non-negative
 Provider retry count, non-negative server-requested retry-delay cap, and cache
@@ -1007,6 +1007,8 @@ Future changes to this behavior must update
 
 ### Model selection
 
+- Agent construction and Provider management work without a default model;
+- creating a new Session without an explicit or default model fails clearly;
 - explicit new-Session model overrides the global default;
 - the default provider/model pair can be saved without a credential;
 - changing the global default affects only later Sessions;

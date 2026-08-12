@@ -175,11 +175,13 @@ thinking level. Configuration entries are excluded from model context. Changes
 made while running replace one pending configuration snapshot and flush at the
 next save point; idle changes append before returning.
 
-`AgentSettings` owns the loaded snapshot whose durable `agent.json` form contains
-the atomic default provider/model pair,
-the default thinking level (`high` when first created), and the safe Provider
-request policy. Default model and thinking changes affect only new Sessions;
-existing Sessions retain their JSONL-persisted values. A default model update
+`AgentSettings` owns the loaded snapshot whose durable `agent.json` form
+optionally contains the atomic default provider/model pair, the default thinking
+level (`high` when first created), and the safe Provider request policy. Default
+model and thinking changes affect only new Sessions;
+existing Sessions retain their JSONL-persisted values. Creating a new Session
+without either an explicit or configured default model fails before the Session
+is published. A default model update
 validates registration and catalog membership but does not require a credential,
 so its actual Provider request may still fail until a credential is supplied.
 

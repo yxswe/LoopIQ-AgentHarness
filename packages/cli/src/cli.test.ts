@@ -172,9 +172,19 @@ describe("CLI executable", () => {
 	it("emits an ordered machine terminal for an accepted failed Run", async () => {
 		const home = await mkdtemp(resolve(tmpdir(), "loopiq-cli-test-"));
 		try {
-			const result = await runExecutable(["run", "hello", "--format", "jsonl", "--workspace", repositoryRoot], {
-				env: { HOME: home },
-			});
+			const result = await runExecutable(
+				[
+					"run",
+					"hello",
+					"--format",
+					"jsonl",
+					"--workspace",
+					repositoryRoot,
+					"--model",
+					"github-copilot/claude-opus-4.6",
+				],
+				{ env: { HOME: home } },
+			);
 			const events = result.stdout
 				.trim()
 				.split("\n")
@@ -206,9 +216,23 @@ describe("CLI executable", () => {
 	it("prints an actionable text error instead of a blank response", async () => {
 		const home = await mkdtemp(resolve(tmpdir(), "loopiq-cli-test-"));
 		try {
-			const result = await runExecutable(["run", "hello", "--workspace", repositoryRoot], { env: { HOME: home } });
+			const result = await runExecutable(
+				["run", "hello", "--workspace", repositoryRoot, "--model", "github-copilot/claude-opus-4.6"],
+				{ env: { HOME: home } },
+			);
 			expect(result.code).toBe(1);
 			expect(result.stderr).toContain("No API key for provider");
+		} finally {
+			await rm(home, { recursive: true, force: true });
+		}
+	});
+
+	it("explains how to configure a missing default model", async () => {
+		const home = await mkdtemp(resolve(tmpdir(), "loopiq-cli-test-"));
+		try {
+			const result = await runExecutable(["run", "hello", "--workspace", repositoryRoot], { env: { HOME: home } });
+			expect(result.code).toBe(1);
+			expect(result.stderr).toContain("specify a Session model or configure an Agent default");
 		} finally {
 			await rm(home, { recursive: true, force: true });
 		}
@@ -232,6 +256,7 @@ describe("CLI executable", () => {
 	it("makes /new leave a resumed Session and create a fresh one", async () => {
 		const home = await mkdtemp(resolve(tmpdir(), "loopiq-cli-test-"));
 		try {
+			await runExecutable(["config", "set-model", "github-copilot/claude-opus-4.6"], { env: { HOME: home } });
 			const created = await runExecutable(
 				["sessions", "create", "--workspace", repositoryRoot, "--format", "json"],
 				{ env: { HOME: home } },

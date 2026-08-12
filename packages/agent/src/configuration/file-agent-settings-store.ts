@@ -16,12 +16,13 @@ function isAgentConfiguration(value: unknown): value is AgentConfiguration {
 	const model = record.defaultModel;
 	const providerRequest = record.providerRequest;
 	return Boolean(
-		model &&
-			typeof model === "object" &&
-			!Array.isArray(model) &&
-			typeof (model as Record<string, unknown>).providerId === "string" &&
-			typeof (model as Record<string, unknown>).modelId === "string" &&
-			Object.keys(model).every((key) => key === "providerId" || key === "modelId") &&
+		(model === undefined ||
+			(typeof model === "object" &&
+				model !== null &&
+				!Array.isArray(model) &&
+				typeof (model as Record<string, unknown>).providerId === "string" &&
+				typeof (model as Record<string, unknown>).modelId === "string" &&
+				Object.keys(model).every((key) => key === "providerId" || key === "modelId"))) &&
 			typeof record.defaultThinkingLevel === "string" &&
 			["off", "minimal", "low", "medium", "high", "xhigh"].includes(record.defaultThinkingLevel) &&
 			providerRequest &&
