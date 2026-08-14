@@ -350,8 +350,11 @@ TypeScript packages.
 redirects stdout/stderr directly to Harbor log files, applies an inner deadline
 with process-group escalation, removes live descendants even after nominal CLI
 exit, validates the versioned CLI stream, and writes one normalized manifest.
-It does not implement Agent execution policy or scoring. ATIF conversion and a
-Server transport remain deferred.
+`integrations/harbor/trajectory.py` strictly converts the completed native event
+stream into a Harbor-validated ATIF-v1.7 `trajectory.json`, correlating tool
+results by call ID and preserving the native files as source evidence. It does
+not implement Agent execution policy or scoring. A Server transport remains
+deferred.
 
 The full lifecycle, artifact contract, compatibility reference, and canonical
 branch completion checklist are documented in

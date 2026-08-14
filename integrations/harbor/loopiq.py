@@ -17,13 +17,18 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from harbor.models.trial.paths import EnvironmentPaths
 
+from integrations.harbor.trajectory import (
+    TrajectoryConversionError,
+    write_loopiq_trajectory,
+)
+
 
 class LoopIQ(BaseInstalledAgent):
     """Install a pinned LoopIQ revision and run one isolated CLI Session per trial."""
 
-    SUPPORTS_ATIF = False
+    SUPPORTS_ATIF = True
     SUPPORTS_RESUME = False
-    ADAPTER_VERSION = "0.1.0"
+    ADAPTER_VERSION = "0.2.0"
     HARBOR_COMPATIBILITY_REVISION = "cc4b7be7c1ace2621b38c4e2e13ef736a9bc884f"
 
     CLI_FLAGS: ClassVar[list[CliFlag]] = [
@@ -45,6 +50,7 @@ class LoopIQ(BaseInstalledAgent):
     _EVENTS_PATH = EnvironmentPaths.agent_dir / "loopiq-events.jsonl"
     _STDERR_PATH = EnvironmentPaths.agent_dir / "loopiq-stderr.log"
     _MANIFEST_PATH = EnvironmentPaths.agent_dir / "loopiq-run-manifest.json"
+    _TRAJECTORY_PATH = EnvironmentPaths.agent_dir / "trajectory.json"
 
     def __init__(
         self,
@@ -258,38 +264,63 @@ class LoopIQ(BaseInstalledAgent):
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
         manifest_path = self.logs_dir / self._MANIFEST_PATH.name
-        if not manifest_path.exists():
-            context.metadata = {
-                "native_terminal_state": "missing",
-                "manifest": self._MANIFEST_PATH.name,
-            }
-            return
-        try:
-            manifest = json.loads(manifest_path.read_text())
-        except (OSError, json.JSONDecodeError):
-            context.metadata = {
-                "native_terminal_state": "invalid",
-                "manifest": self._MANIFEST_PATH.name,
-            }
-            return
-
-        native_terminal = manifest.get("nativeTerminal") or {}
-        terminal = native_terminal.get("event") or {}
-        usage = terminal.get("usage") or {}
-        context.n_input_tokens = int(usage.get("inputTokens", 0)) + int(
-            usage.get("cacheReadTokens", 0)
-        )
-        context.n_cache_tokens = int(usage.get("cacheReadTokens", 0))
-        context.n_output_tokens = int(usage.get("outputTokens", 0))
-        cost = float(usage.get("costUsd", 0))
-        context.cost_usd = cost if cost > 0 else None
-        context.metadata = {
+        events_path = self.logs_dir / self._EVENTS_PATH.name
+        trajectory_path = self.logs_dir / self._TRAJECTORY_PATH.name
+        metadata: dict[str, Any] = {
             "manifest": self._MANIFEST_PATH.name,
             "events": self._EVENTS_PATH.name,
             "stderr": self._STDERR_PATH.name,
-            "native_terminal_state": native_terminal.get("state", "missing"),
-            "run_status": terminal.get("status"),
-            "run_reason": terminal.get("reason"),
-            "usage_state": usage.get("state", "unknown"),
+            "native_terminal_state": "missing",
             "event_schema": {"name": "loopiq.cli.event", "version": 1},
         }
+        if not manifest_path.exists():
+            metadata["manifest_state"] = "missing"
+        else:
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                metadata["manifest_state"] = "invalid"
+                metadata["native_terminal_state"] = "invalid"
+            else:
+                native_terminal = manifest.get("nativeTerminal") or {}
+                terminal = native_terminal.get("event") or {}
+                usage = terminal.get("usage") or {}
+                context.n_input_tokens = int(usage.get("inputTokens", 0)) + int(
+                    usage.get("cacheReadTokens", 0)
+                )
+                context.n_cache_tokens = int(usage.get("cacheReadTokens", 0))
+                context.n_output_tokens = int(usage.get("outputTokens", 0))
+                cost = float(usage.get("costUsd", 0))
+                context.cost_usd = cost if cost > 0 else None
+                metadata.update(
+                    {
+                        "manifest_state": "present",
+                        "native_terminal_state": native_terminal.get(
+                            "state", "missing"
+                        ),
+                        "run_status": terminal.get("status"),
+                        "run_reason": terminal.get("reason"),
+                        "usage_state": usage.get("state", "unknown"),
+                    }
+                )
+
+        try:
+            trajectory = write_loopiq_trajectory(events_path, trajectory_path)
+        except (TrajectoryConversionError, OSError, ValueError) as error:
+            metadata["trajectory_state"] = "invalid"
+            metadata["trajectory_error"] = str(error)[:1000]
+            self.logger.warning(
+                "Could not convert LoopIQ events at %s to ATIF: %s",
+                events_path,
+                error,
+            )
+        else:
+            metadata.update(
+                {
+                    "trajectory": self._TRAJECTORY_PATH.name,
+                    "trajectory_state": "present",
+                    "trajectory_schema": trajectory.schema_version,
+                    "trajectory_steps": len(trajectory.steps),
+                }
+            )
+        context.metadata = metadata

@@ -41,7 +41,7 @@ Harbor -------> loopiq run  --+
                               |
                        Harbor adapter
                               |
-                 manifest / future ATIF / verifier reward
+                    manifest / ATIF / verifier reward
 ```
 
 `chat` and `run` are two product surfaces over the same Agent. Harbor is only a
@@ -69,7 +69,7 @@ machine consumer of `loopiq run`; it is not a new Agent mode.
 | Installation | The adapter checks out the supplied Git revision and builds it in the trial, but does not yet enforce a full commit SHA or use an immutable published package/image. |
 | Secret-file permissions | The adapter uses temporary files and deletes them, but this repository does not explicitly enforce and test mode `0600` after Harbor uploads them. |
 | Chat experience | Banner, basic commands, Ctrl-C abort, and generic tool progress exist; explicit `/abort` and richer operation summaries remain. |
-| ATIF | Native LoopIQ JSONL and a Harbor manifest exist. `trajectory.json` and `SUPPORTS_ATIF = True` remain deliberately unimplemented. |
+| ATIF | The Harbor adapter strictly converts completed native LoopIQ JSONL into validated ATIF-v1.7 while retaining the native stream as evidence. |
 
 ## 1. Command Surface
 
@@ -206,7 +206,9 @@ Implementation layout:
 integrations/harbor/
   loopiq.py
   supervisor.py
+  trajectory.py
   test_supervisor.py
+  test_trajectory.py
 ```
 
 The class is loaded through:
@@ -227,7 +229,7 @@ The adapter and supervisor own:
 - an inner deadline and `SIGINT -> SIGTERM -> SIGKILL` escalation;
 - removal of live descendants even after nominal CLI exit;
 - native-stream validation and a normalized trial manifest;
-- later conversion of native events to ATIF.
+- validated ATIF-v1.7 conversion of native events after log download.
 
 They must not own Provider calls, Session persistence, tool execution, context
 compaction, event repair, or reward calculation.
@@ -289,6 +291,12 @@ without an exception. The task reward was `0.0`, which is a task-solution
 result rather than an integration failure. A 300-second inner deadline was too
 short; the successful Run took 593,764 ms, so the example keeps explicit slack
 between the inner and outer deadlines.
+
+The ATIF converter was subsequently validated against the pinned Harbor
+revision with its fixed protocol fixture and the successful `eac817c` Trial
+`gpt2-codegolf__uFguDGU`. The real stream produced 62 sequential Steps with 65
+tool calls and 65 correlated results; Harbor's Viewer API loaded the generated
+ATIF-v1.7 document successfully.
 
 ## 5. Stable CLI JSONL Protocol
 
@@ -413,7 +421,7 @@ Target layout:
 - `loopiq-stderr.log` contains CLI diagnostics.
 - `loopiq-run-manifest.json` is Harbor-adapter/supervisor owned because only
   that boundary knows signals, outer containment, and descendant cleanup.
-- `trajectory.json` will be Harbor-adapter owned and derived from native events.
+- `trajectory.json` is Harbor-adapter owned and derived from native events.
 - Reward is verifier/Harbor owned and must not enter Agent or CLI.
 
 - [x] Events, stderr, and manifest artifacts use the fixed paths above.
@@ -423,10 +431,20 @@ Target layout:
 - [x] The adapter copies only bounded usage and terminal metadata into
   `AgentContext`, not the complete event stream.
 - [ ] Enforce total artifact-size and redaction policies.
-- [ ] Convert native events to validated ATIF `trajectory.json` inside the
+- [x] Convert native events to validated ATIF `trajectory.json` inside the
   Harbor adapter.
-- [ ] Set `SUPPORTS_ATIF = True` only after fixture and pinned-Harbor validation
+- [x] Set `SUPPORTS_ATIF = True` only after fixture and pinned-Harbor validation
   pass.
+
+`trajectory.py` streams and validates schema/version, Session and Run identity,
+monotonic source sequence, terminal presence, and tool-call correlation. It
+maps completed user and assistant messages to sequential Steps, associates
+parallel or reordered tool results by `toolCallId`, carries explicit thinking
+content without reconstructing hidden reasoning, and maps per-inference and
+partial aggregate usage to ATIF metrics. The writer validates against Harbor's
+pinned Pydantic models before atomically replacing `trajectory.json`. A failed
+conversion leaves native evidence unchanged and records the bounded error in
+`AgentContext.metadata` instead of fabricating a trajectory.
 
 ## 9. Personal Chat Experience
 
@@ -454,9 +472,9 @@ summary.
 | Phase | Goal | Status |
 | --- | --- | --- |
 | 1. Honest CLI contract | Executable bin, help/version, strict grammar, visible errors, cleanup/exit codes, real process tests | Complete |
-| 2. Harbor smoke evaluation | Pinned installation, isolated HOME, non-interactive setup, stable JSONL, supervisor, manifest, `SUPPORTS_ATIF = False`, real container smoke | In progress: core and real smoke complete; immutable artifact, explicit `0600`, and automated smoke remain |
+| 2. Harbor smoke evaluation | Pinned installation, isolated HOME, non-interactive setup, stable JSONL, supervisor, manifest, real container smoke | In progress: core and real smoke complete; immutable artifact, explicit `0600`, and automated smoke remain |
 | 3. Reliable evaluation | Agent deadlines/budgets, background-process ownership, complete usage/cost, bounded output/backpressure, failure/timeout/kill E2E coverage | Not started |
-| 4. ATIF | Harbor-side conversion and validation, then `SUPPORTS_ATIF = True` | Not started |
+| 4. ATIF | Harbor-side ATIF-v1.7 conversion, fixture coverage, pinned-model validation, and `SUPPORTS_ATIF = True` | Complete |
 
 Phase 3 must include end-to-end fixtures for success, Provider failure, tool
 failure, length termination, timeout, abort, large output, hard kill, and full
