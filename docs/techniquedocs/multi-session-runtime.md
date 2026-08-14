@@ -102,7 +102,7 @@ Every facade method performs one delegation to `AgentSessionManager`,
 `ModelRuntime`, or `AgentSettings`; it does not implement cross-owner workflows.
 `createAgent()` is the separate composition root. It asynchronously initializes
 local settings and stores in the single per-user Agent Home (`~/.loopiq`),
-registers the eleven supported providers, creates one `AgentEngine` and one
+registers the twelve supported providers, creates one `AgentEngine` and one
 `AgentSessionManager`, wires narrow model and configuration capabilities, and
 returns the facade. Creation does not log in, validate credentials, refresh
 OAuth, or access a provider. The Agent returns serializable summaries,

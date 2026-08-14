@@ -1,7 +1,9 @@
 import { fauxProvider, InMemoryCredentialStore, type Provider } from "@loopiq/ai";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtin-providers.ts";
 import { ModelRuntime } from "./model-runtime.ts";
+
+afterEach(() => vi.unstubAllGlobals());
 
 function createCopilotFixture(options?: { availableModelIds?: string[]; refreshError?: Error }) {
 	const credentials = new InMemoryCredentialStore();
@@ -206,6 +208,24 @@ describe("ModelRuntime", () => {
 		await expect(runtime.listModels("github-copilot")).rejects.toMatchObject({
 			code: "provider_validation_unavailable",
 		});
+	});
+
+	it("lists only models currently advertised by the local LiteLLM Copilot proxy", async () => {
+		const credentials = new InMemoryCredentialStore();
+		await credentials.modify("litellm-copilot", async () => ({ type: "api_key", key: "secret" }));
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				async () =>
+					new Response(JSON.stringify({ data: [{ id: "gpt-5.3-codex" }, { id: "gpt-5.6-sol" }] }), {
+						status: 200,
+					}),
+			),
+		);
+		const registration = BUILTIN_PROVIDER_REGISTRATIONS.find((provider) => provider.id === "litellm-copilot")!;
+		const runtime = new ModelRuntime({ credentials, registrations: [registration] });
+
+		expect((await runtime.listModels("litellm-copilot")).map((model) => model.modelId)).toEqual(["gpt-5.3-codex"]);
 	});
 
 	it("validates before persisting and removes only the credential", async () => {

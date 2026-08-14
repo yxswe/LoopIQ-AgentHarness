@@ -269,6 +269,14 @@ environment:
   delete: true
 ```
 
+For local Docker evaluation through the developer's authenticated LiteLLM
+Copilot proxy, use `litellm-copilot/<model>` and pass the LiteLLM master key as
+`LOOPIQ_API_TOKEN`. The Agent talks to
+`http://host.docker.internal:4000/v1`; `localhost` would refer to the Harbor
+trial container itself. LiteLLM owns upstream Copilot authentication, while the
+Harbor trial stores only its isolated proxy credential. This path is local
+Docker only and is not expected to work from a cloud sandbox.
+
 ## 5. Stable CLI JSONL Protocol
 
 CLI owns one external protocol rather than serializing

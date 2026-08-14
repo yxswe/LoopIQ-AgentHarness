@@ -146,6 +146,7 @@ local startup, whether or not a credential exists:
 | Provider ID | Supported credential methods |
 | --- | --- |
 | `github-copilot` | OAuth, API token |
+| `litellm-copilot` | API token |
 | `openai-codex` | OAuth |
 | `openai` | API token |
 | `anthropic` | OAuth, API token |
@@ -160,6 +161,14 @@ local startup, whether or not a credential exists:
 Registration means the Agent knows the provider implementation, authentication
 methods, and model catalog. It does not mean that the provider is configured,
 authenticated, valid, selectable, or the default.
+
+`litellm-copilot` is the local Docker evaluation bridge. It sends
+OpenAI-compatible requests to `http://host.docker.internal:4000/v1`, treats the
+LiteLLM master key as its API-token credential, and reports only model IDs that
+are both returned by the proxy's authenticated `/models` endpoint and mapped to
+known Agent model metadata. The proxy owns the upstream GitHub Copilot login;
+the isolated Agent and Harbor trial never perform Copilot OAuth. This endpoint
+is intentionally local-Docker-specific and is not a cloud Harbor transport.
 
 The supported-provider set is Agent application policy. Adding another
 built-in provider later changes this table and the Agent-owned registration
@@ -496,7 +505,7 @@ interface Agent {
 Returned values are Agent-owned serializable summaries, not objects from
 `@loopiq/ai`.
 
-`listProviders()` returns all eleven registered providers and their local
+`listProviders()` returns all twelve registered providers and their local
 credential-presence state without network access. A `validateCredentials`
 option performs online validation and returns status for each credential-backed
 provider. UI switchers must display only entries whose resulting status is
@@ -517,6 +526,12 @@ the Provider OAuth implementation, persists any rotated token and returned
 Discovery errors are reported instead of falling back to the static catalog;
 `refresh: true` is therefore redundant for this Provider. Listing models never
 starts interactive login or validates unrelated Provider credentials.
+
+LiteLLM Copilot is also always discovered live when included. Listing requires
+its persisted master key, requests the proxy `/models` endpoint, replaces the
+in-memory Provider catalog with the supported intersection, and reports
+discovery failure instead of claiming that its static validation catalog is
+currently available.
 
 `getProviderStatus()` returns the current in-memory validation result when it is
 still fresh; otherwise it reports only local credential presence as `unchecked`
@@ -689,7 +704,7 @@ CLI or Server
   -> await createAgent()
   -> Agent loads agent.json
   -> Agent creates ModelRuntime
-  -> ModelRuntime registers all eleven supported providers
+  -> ModelRuntime registers all twelve supported providers
   -> Agent returns without reading or validating the credential online
 
 later: run(Session)
@@ -731,7 +746,7 @@ agent.run(sessionId, input)
 
 ```text
 createAgent()
-  -> registers all eleven providers
+  -> registers all twelve providers
   -> leaves credentials.json unchanged
   -> returns without prompting or online validation
 
@@ -952,7 +967,7 @@ added or changed under `packages/ai`.
 2. Add a single file credential store with correct `modify()`, locking, atomic
    writes, permissions, and tests.
 3. Add the Agent settings store and the single current `agent.json` shape.
-4. Add `ModelRuntime` with the agreed eleven-provider registration list, model
+4. Add `ModelRuntime` with the agreed twelve-provider registration list, model
    lookup, credential validation strategies, credential mutation, status, and
    stream capability.
 5. Make `createAgent()` asynchronous and internalize concrete construction.
@@ -987,7 +1002,7 @@ Future changes to this behavior must update
 ### Authentication
 
 - explicit API-key and OAuth login persistence;
-- all eleven agreed providers are registered without credentials;
+- all twelve agreed providers are registered without credentials;
 - only a provider with a persisted, valid credential is switchable;
 - candidate credentials are validated before first persistence;
 - GitHub Copilot uses the public device flow without an Enterprise-domain prompt;
@@ -1053,7 +1068,7 @@ Future changes to this behavior must update
 All recorded decisions below are implemented:
 
 - [x] D1 — One Agent per process and many Sessions per Agent.
-- [x] D2 — `ModelRuntime` owns provider/model behavior and registers the agreed eleven providers.
+- [x] D2 — `ModelRuntime` owns provider/model behavior and registers the agreed twelve providers.
 - [x] D3 — Public Agent construction is async, accepts no persistence-location option, and uses `~/.loopiq`.
 - [x] D4 — Agent construction performs no login or provider network access.
 - [x] D5 — `ModelRuntime` owns credential operations; the Agent facade exposes them and adapters provide interaction callbacks.

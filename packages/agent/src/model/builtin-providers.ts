@@ -10,6 +10,7 @@ import { openaiProvider } from "@loopiq/ai/providers/openai";
 import { openaiCodexProvider } from "@loopiq/ai/providers/openai-codex";
 import { openrouterProvider } from "@loopiq/ai/providers/openrouter";
 import { zaiCodingCnProvider } from "@loopiq/ai/providers/zai-coding-cn";
+import { createLitellmCopilotProvider } from "./litellm-copilot-provider.ts";
 import type { ProviderAuthMethod } from "./provider-types.ts";
 
 export interface BuiltinProviderRegistration {
@@ -20,6 +21,7 @@ export interface BuiltinProviderRegistration {
 
 export const BUILTIN_PROVIDER_REGISTRATIONS: readonly BuiltinProviderRegistration[] = [
 	{ id: "github-copilot", authMethods: ["oauth", "api_token"], create: githubCopilotProvider },
+	{ id: "litellm-copilot", authMethods: ["api_token"], create: createLitellmCopilotProvider },
 	{ id: "openai-codex", authMethods: ["oauth"], create: openaiCodexProvider },
 	{ id: "openai", authMethods: ["api_token"], create: openaiProvider },
 	{ id: "anthropic", authMethods: ["oauth", "api_token"], create: anthropicProvider },

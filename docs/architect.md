@@ -106,8 +106,13 @@ and runtime model switching are documented in
   model discovery and first-login validation-model selection, and a
   credential-bound online validation cache.
 - `model/builtin-providers.ts` — the application-supported provider registry:
-  GitHub Copilot, OpenAI Codex, OpenAI, Anthropic, Google, OpenRouter, DeepSeek,
-  Moonshot AI CN, MiniMax CN, Z.AI Coding CN, and Kimi For Coding.
+  GitHub Copilot, the local LiteLLM Copilot proxy, OpenAI Codex, OpenAI,
+  Anthropic, Google, OpenRouter, DeepSeek, Moonshot AI CN, MiniMax CN, Z.AI
+  Coding CN, and Kimi For Coding.
+- `model/litellm-copilot-provider.ts` — Agent-owned adapter for the local
+  Docker LiteLLM proxy at `host.docker.internal:4000`. It uses API-token auth,
+  OpenAI-compatible chat completions, and live `/models` discovery intersected
+  with the Agent's supported proxy catalog. It does not modify `@loopiq/ai`.
 - `model/provider-types.ts` — serializable Agent-facing provider, model, and
   credential-interaction contracts. Adapter APIs never expose `@loopiq/ai`
   runtime objects.
@@ -317,7 +322,8 @@ Agent APIs. Provider listing is local by default. An unscoped model listing
 includes only Providers with persisted credentials; an explicitly scoped model
 listing can inspect any registered Provider. Credential validation and model
 refresh are explicit network operations except that every included GitHub
-Copilot listing always refreshes account availability. On the
+Copilot or local LiteLLM Copilot listing refreshes its current available-model
+intersection. On the
 first GitHub Copilot OAuth login, the CLI renders the Agent-provided model
 selection prompt; it does not implement model discovery or validation.
 API-token authentication can read a bounded secret from stdin for automation.

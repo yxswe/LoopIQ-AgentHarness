@@ -103,6 +103,7 @@ describe("Agent", () => {
 		agents.push(first);
 		expect((await first.listProviders()).map((provider) => provider.providerId)).toEqual([
 			"github-copilot",
+			"litellm-copilot",
 			"openai-codex",
 			"openai",
 			"anthropic",

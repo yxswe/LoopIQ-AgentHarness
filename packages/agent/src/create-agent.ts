@@ -55,7 +55,7 @@ async function createAgentInHome(options: AgentConstructionOptions): Promise<Age
 	);
 
 	// FileCredentialStore owns `<agentHome>/credentials.json`, while ModelRuntime owns
-	// all model-domain behavior above it. The production runtime has the eleven
+	// all model-domain behavior above it. The production runtime has the twelve
 	// supported Provider definitions registered (for example GitHub Copilot, OpenAI,
 	// Anthropic, Google, and OpenRouter), the local credential store, Provider/model
 	// catalog lookup, explicit OAuth/API-token setup and validation, credential removal,

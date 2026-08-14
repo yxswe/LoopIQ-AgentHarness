@@ -11,6 +11,11 @@ import type { ModelReference } from "../base/options.ts";
 import { AgentRuntimeError, toError } from "../base/types.ts";
 import type { BuiltinProviderRegistration } from "./builtin-providers.ts";
 import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtin-providers.ts";
+import {
+	createLitellmCopilotProvider,
+	discoverLitellmCopilotModelIds,
+	LITELLM_COPILOT_PROVIDER_ID,
+} from "./litellm-copilot-provider.ts";
 import type {
 	AddProviderCredentialOptions,
 	ListModelsOptions,
@@ -117,6 +122,8 @@ export class ModelRuntime {
 		for (const configuredProviderId of providerIds) {
 			if (configuredProviderId === "github-copilot") {
 				models.push(...(await this.refreshGitHubCopilotModels()));
+			} else if (configuredProviderId === LITELLM_COPILOT_PROVIDER_ID) {
+				models.push(...(await this.refreshLitellmCopilotModels()));
 			} else {
 				if (options?.refresh) await this.mutableModels.refresh(configuredProviderId);
 				models.push(...this.mutableModels.getModels(configuredProviderId));
@@ -463,6 +470,29 @@ export class ModelRuntime {
 			);
 		}
 		return this.mutableModels.getModels(registration.id).filter((model) => availableModelIds.has(model.id));
+	}
+
+	private async refreshLitellmCopilotModels(): Promise<readonly Model<any>[]> {
+		const credential = await this.credentials.read(LITELLM_COPILOT_PROVIDER_ID);
+		if (credential?.type !== "api_key" || !credential.key) {
+			throw new AgentRuntimeError(
+				"provider_auth_required",
+				"LiteLLM Copilot model discovery requires a persisted master key",
+			);
+		}
+
+		try {
+			const availableModelIds = await discoverLitellmCopilotModelIds(credential.key);
+			const provider = createLitellmCopilotProvider(availableModelIds);
+			this.mutableModels.setProvider(provider);
+			return provider.getModels();
+		} catch (error) {
+			throw new AgentRuntimeError(
+				"provider_validation_unavailable",
+				"Could not refresh the local LiteLLM Copilot model catalog",
+				toError(error),
+			);
+		}
 	}
 
 	private availableModelIds(credential: Credential | undefined): Set<string> | undefined {
