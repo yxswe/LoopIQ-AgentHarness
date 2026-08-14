@@ -307,7 +307,10 @@ bounded stdin, and renders text, one terminal JSON record, or the versioned
 `loopiq.cli.event` JSONL protocol. `run` is non-interactive and creates a fresh
 Session by default; `--session` and `--continue` explicitly resume. `chat`
 provides sequential interaction, delayed Session creation, and explicit
-Session/model/thinking commands.
+Session/model/thinking commands. Both surfaces use one small per-Run coordinator
+for subscription, execution, settlement, and unsubscription while retaining
+their different Agent process lifetimes. Explicit Session management exposes
+listing and deletion; creation belongs to `run` and `chat`.
 
 Session, Provider, model, credential, and Agent-configuration commands map to
 Agent APIs. Provider listing is local by default. An unscoped model listing
@@ -341,8 +344,8 @@ exit, validates the versioned CLI stream, and writes one normalized manifest.
 It does not implement Agent execution policy or scoring. ATIF conversion and a
 Server transport remain deferred.
 
-The full lifecycle, artifact contract, compatibility reference, and remaining
-work are documented in
+The full lifecycle, artifact contract, compatibility reference, and canonical
+branch completion checklist are documented in
 [`features/harbor-local-evaluation.md`](./features/harbor-local-evaluation.md).
 
 ## Package: `@loopiq/devui`

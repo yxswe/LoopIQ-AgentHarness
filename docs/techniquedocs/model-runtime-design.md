@@ -285,8 +285,8 @@ input only and does not change the Agent default model.
 The Agent never turns a normal command into an interactive login. This keeps
 headless and server behavior deterministic.
 
-- `sessions list`, `sessions create`, Session inspection, and deletion work
-  without authentication.
+- Session listing, inspection, deletion, and creation through `run` or `chat`
+  work without authentication.
 - An explicit login/token command or Server endpoint calls
   `addProviderCredential()`.
 - A model run without usable authentication reports the request-time Provider

@@ -36,7 +36,6 @@ type Command =
 	| "run"
 	| "chat"
 	| "sessions-list"
-	| "sessions-create"
 	| "sessions-delete"
 	| "providers-list"
 	| "providers-add"
@@ -118,11 +117,10 @@ function parseCommand(args: string[]): { command: Command; target?: string } {
 	if (group === "sessions") {
 		const action = args.shift();
 		if (action === "list") return { command: "sessions-list" };
-		if (action === "create") return { command: "sessions-create" };
 		if (action === "delete") {
 			return { command: "sessions-delete", target: takeTarget(args, "sessions delete requires a Session ID") };
 		}
-		throw new CliUsageError("sessions requires list, create, or delete");
+		throw new CliUsageError("sessions requires list or delete");
 	}
 	if (group === "providers") {
 		const action = args.shift();
@@ -201,14 +199,14 @@ export function parseArgs(argv: string[]): ParsedOptions {
 			options.continueSession = true;
 			args.splice(index, 1);
 		} else if (argument === "--workspace") {
-			requireCommand(options.command, argument, ["run", "chat", "sessions-create"]);
+			requireCommand(options.command, argument, ["run", "chat"]);
 			options.workspaceDir = resolve(takeValue(args, index, argument));
 			options.workspaceExplicit = true;
 		} else if (argument === "--model") {
-			requireCommand(options.command, argument, ["run", "chat", "sessions-create"]);
+			requireCommand(options.command, argument, ["run", "chat"]);
 			options.model = takeValue(args, index, argument);
 		} else if (argument === "--thinking") {
-			requireCommand(options.command, argument, ["run", "chat", "sessions-create"]);
+			requireCommand(options.command, argument, ["run", "chat"]);
 			const thinking = takeValue(args, index, argument);
 			if (!isThinkingLevel(thinking)) throw new CliUsageError("--thinking is invalid");
 			options.thinking = thinking;
@@ -217,7 +215,6 @@ export function parseArgs(argv: string[]): ParsedOptions {
 				"version",
 				"run",
 				"sessions-list",
-				"sessions-create",
 				"sessions-delete",
 				"providers-list",
 				"providers-add",
@@ -588,19 +585,42 @@ function resultExitCode(result: RunResult, cleanupError?: unknown, interrupted =
 	return 0;
 }
 
+async function executeRun(
+	agent: Agent,
+	session: SessionSnapshot,
+	prompt: string,
+	output: RunOutput,
+	signal: AbortSignal,
+): Promise<RunResult> {
+	const unsubscribe = await agent.subscribe(session.id, output.onEnvelope);
+	let handle: RunHandle | undefined;
+	const abort = () => {
+		if (handle) void agent.abort(handle.sessionId, handle.runId).catch(() => {});
+	};
+	if (!signal.aborted) signal.addEventListener("abort", abort, { once: true });
+	try {
+		handle = await agent.run(session.id, { text: prompt });
+		output.start(session, handle);
+		if (signal.aborted) abort();
+		return await handle.result;
+	} finally {
+		signal.removeEventListener("abort", abort);
+		unsubscribe();
+	}
+}
+
 async function runOnce(options: ParsedOptions): Promise<number> {
 	const prompt = options.stdin ? await readLimitedStdin(MAX_PROMPT_BYTES, "Prompt") : options.prompt!;
 	if (!prompt.trim()) throw new CliUsageError("Prompt must not be empty");
 	const agent = await createAgent();
-	let handle: RunHandle | undefined;
-	let unsubscribe: (() => void) | undefined;
 	let interrupted = false;
 	let signalCount = 0;
+	const runController = new AbortController();
 	const output = createRunOutput(options.format);
 	const onSignal = () => {
 		interrupted = true;
 		signalCount++;
-		if (handle) void agent.abort(handle.sessionId, handle.runId).catch(() => {});
+		runController.abort();
 		if (signalCount > 1) process.exitCode = 130;
 	};
 	process.on("SIGINT", onSignal);
@@ -609,15 +629,10 @@ async function runOnce(options: ParsedOptions): Promise<number> {
 	let cleanupError: unknown;
 	try {
 		const session = await selectSession(options, agent);
-		unsubscribe = await agent.subscribe(session.id, output.onEnvelope);
-		handle = await agent.run(session.id, { text: prompt });
-		output.start(session, handle);
-		if (interrupted) void agent.abort(handle.sessionId, handle.runId).catch(() => {});
-		result = await handle.result;
+		result = await executeRun(agent, session, prompt, output, runController.signal);
 	} finally {
 		process.off("SIGINT", onSignal);
 		process.off("SIGTERM", onSignal);
-		unsubscribe?.();
 		try {
 			await agent.shutdown({ abortRunning: true });
 		} catch (error) {
@@ -670,15 +685,15 @@ async function writeChatBanner(agent: Agent, options: ParsedOptions, session?: S
 async function runChat(options: ParsedOptions): Promise<number> {
 	const agent = await createAgent();
 	let session: SessionSnapshot | undefined;
-	let currentHandle: RunHandle | undefined;
+	let runController: AbortController | undefined;
 	let questionController: AbortController | undefined;
 	let exitRequested = false;
 	let terminateAfterRun = false;
 	let hadFailure = false;
 	const onSignal = (signal: NodeJS.Signals) => {
-		if (currentHandle) {
+		if (runController) {
 			if (signal === "SIGTERM") terminateAfterRun = true;
-			void agent.abort(currentHandle.sessionId, currentHandle.runId).catch(() => {});
+			runController.abort();
 		} else {
 			exitRequested = true;
 			questionController?.abort();
@@ -755,15 +770,12 @@ async function runChat(options: ParsedOptions): Promise<number> {
 			try {
 				session ??= await selectSession(options, agent);
 				const output = createRunOutput("text");
-				const unsubscribe = await agent.subscribe(session.id, output.onEnvelope);
+				runController = new AbortController();
 				let result: RunResult;
 				try {
-					currentHandle = await agent.run(session.id, { text: input });
-					output.start(session, currentHandle);
-					result = await currentHandle.result;
+					result = await executeRun(agent, session, input, output, runController.signal);
 				} finally {
-					currentHandle = undefined;
-					unsubscribe();
+					runController = undefined;
 				}
 				output.complete(result);
 				if (resultExitCode(result) !== 0) hadFailure = true;
@@ -940,7 +952,6 @@ async function runManagementCommand(options: ParsedOptions): Promise<number> {
 	try {
 		let value: unknown;
 		if (options.command === "sessions-list") value = await agent.listSessions();
-		else if (options.command === "sessions-create") value = await selectSession(options, agent);
 		else if (options.command === "sessions-delete") {
 			await agent.deleteSession(options.target!);
 			value = { deleted: options.target };
@@ -993,7 +1004,6 @@ Usage:
   loopiq chat --session ID
   loopiq chat --continue [--workspace DIR]
   loopiq sessions list [--format text|json]
-  loopiq sessions create [--workspace DIR] [--model PROVIDER/MODEL] [--thinking LEVEL]
   loopiq sessions delete ID
   loopiq providers list [--format text|json]
   loopiq providers add ID [--auth-method api_token|oauth] [--token-stdin]

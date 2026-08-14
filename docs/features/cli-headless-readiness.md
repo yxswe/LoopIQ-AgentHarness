@@ -41,7 +41,7 @@ overrides with exit code `2`.
 | One shot | `run <prompt>` or `run --stdin`; non-interactive and fresh by default |
 | Interactive | `chat [initial prompt]` with `/help`, `/sessions`, `/new`, `/model`, `/thinking`, and `/exit` |
 | Session selection | `--session ID` selects one exact Session; `--continue` selects the most recently updated Session in the requested Workspace |
-| Session management | `sessions list/create/delete` |
+| Session management | `sessions list/delete`; Session creation belongs to `run` and `chat` |
 | Models and Providers | local `providers list`, explicit `providers validate`, `providers add/remove`, and `models list [PROVIDER] [--refresh]`; unscoped listing includes only credential-backed Providers, while every included GitHub Copilot listing refreshes account availability |
 | Non-interactive credential input | `providers add ID --token-stdin`; the token is read from stdin and is never placed in process arguments |
 | Configuration | `config get`, `set-model`, `set-thinking`, and `set-provider-request` |
@@ -87,8 +87,11 @@ For `loopiq run`, the CLI:
    execution, and settlement paths after Agent construction.
 
 The subscribe-before-run ordering prevents the CLI from losing early Session
-events. The CLI owns output mapping only; it does not reinterpret the Agent
-turn loop.
+events. `run` and each Chat message use the same small per-Run coordinator for
+subscribe, start, wait, and unsubscribe. The callers retain their different
+process lifetimes: one-shot mode shuts down after its result, while Chat keeps
+one Agent until interactive exit. The CLI owns output mapping only; it does not
+reinterpret the Agent turn loop.
 
 ## Versioned Machine Output
 

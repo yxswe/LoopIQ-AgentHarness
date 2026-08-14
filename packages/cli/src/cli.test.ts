@@ -126,7 +126,7 @@ describe("CLI argument parsing", () => {
 	});
 
 	it("rejects options and arguments that a command does not own", () => {
-		expect(() => parseArgs(["sessions", "create", "--session", "existing"])).toThrow(/not valid/);
+		expect(() => parseArgs(["sessions", "create"])).toThrow(/list or delete/);
 		expect(() => parseArgs(["sessions", "list", "extra"])).toThrow(/Unexpected argument/);
 		expect(() => parseArgs(["--format", "json", "sessions", "list"])).toThrow(/Unknown command/);
 	});
@@ -157,6 +157,7 @@ describe("CLI executable", () => {
 	it("runs through the npm bin symlink and exposes help", async () => {
 		const result = await execFileAsync(executable, ["--help"], { cwd: repositoryRoot });
 		expect(result.stdout).toContain("LoopIQ Agent CLI");
+		expect(result.stdout).not.toContain("sessions create");
 		expect(result.stderr).toBe("");
 	});
 
@@ -269,12 +270,12 @@ describe("CLI executable", () => {
 		const home = await mkdtemp(resolve(tmpdir(), "loopiq-cli-test-"));
 		try {
 			await runExecutable(["config", "set-model", "github-copilot/claude-opus-4.6"], { env: { HOME: home } });
-			const created = await runExecutable(
-				["sessions", "create", "--workspace", repositoryRoot, "--format", "json"],
-				{ env: { HOME: home } },
-			);
-			const original = JSON.parse(created.stdout) as { id: string };
-			const chat = await runExecutable(["chat", "/new", "--session", original.id], {
+			const created = await runExecutable(["run", "seed", "--workspace", repositoryRoot, "--format", "json"], {
+				env: { HOME: home },
+			});
+			expect(created.code).toBe(1);
+			const original = JSON.parse(created.stdout) as { sessionId: string };
+			const chat = await runExecutable(["chat", "/new", "--session", original.sessionId], {
 				env: { HOME: home },
 				inputAfter: { marker: "A new Session", text: "hello\n" },
 			});
@@ -283,7 +284,7 @@ describe("CLI executable", () => {
 			const listed = await runExecutable(["sessions", "list", "--format", "json"], { env: { HOME: home } });
 			const sessions = JSON.parse(listed.stdout) as { id: string }[];
 			expect(sessions).toHaveLength(2);
-			expect(sessions.some((session) => session.id !== original.id)).toBe(true);
+			expect(sessions.some((session) => session.id !== original.sessionId)).toBe(true);
 		} finally {
 			await rm(home, { recursive: true, force: true });
 		}
