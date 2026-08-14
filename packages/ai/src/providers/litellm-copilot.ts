@@ -1,7 +1,9 @@
-import { createProvider, envApiKeyAuth, type Model, type Provider } from "@loopiq/ai";
-import { openAICompletionsApi } from "@loopiq/ai/api/openai-completions.lazy";
-import { GITHUB_COPILOT_MODELS } from "@loopiq/ai/providers/github-copilot.models";
-import { OPENAI_MODELS } from "@loopiq/ai/providers/openai.models";
+import { openAICompletionsApi } from "../api/openai-completions.lazy.ts";
+import { envApiKeyAuth } from "../auth/helpers.ts";
+import { createProvider, type Provider } from "../models.ts";
+import type { Model } from "../types.ts";
+import { GITHUB_COPILOT_MODELS } from "./github-copilot.models.ts";
+import { OPENAI_MODELS } from "./openai.models.ts";
 
 export const LITELLM_COPILOT_PROVIDER_ID = "litellm-copilot";
 export const LITELLM_COPILOT_BASE_URL = "http://host.docker.internal:4000/v1";

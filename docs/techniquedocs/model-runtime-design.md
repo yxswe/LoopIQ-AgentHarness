@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last reviewed: 2026-08-12
+Last reviewed: 2026-08-14
 
 This document defines the implemented ownership and persistence boundaries between
 the Agent, LLM providers, credentials, Sessions, the Server, and the CLI. It is
@@ -23,13 +23,15 @@ kept as a decision record so the reasons behind each boundary remain explicit.
 - Keep the selected model for a Session durable and independent from the global
   default model.
 - Give CLI and Server the same provider, authentication, and model behavior.
-- Preserve `@loopiq/ai` as an externally sourced, read-only dependency.
+- Keep repository-specific `@loopiq/ai` changes exceptional and isolated; the
+  local LiteLLM Copilot Provider occupies one standalone provider module.
 - Remove the current duplicated credential stores and provider setup without
   retaining forwarding wrappers.
 
 ## Non-goals
 
-- This change does not redesign the provider implementations in `@loopiq/ai`.
+- This change does not redesign existing provider implementations in
+  `@loopiq/ai`; it adds one isolated local LiteLLM Copilot provider module.
 - This change does not introduce user-defined providers or a general provider
   plugin format.
 - This change does not register every provider exported by `@loopiq/ai`; it
@@ -86,7 +88,7 @@ ModelRuntime  AgentSettings  AgentSessionManager
 - models
       |
       v
-  @loopiq/ai (read-only dependency)
+  @loopiq/ai (provider implementations)
 ```
 
 There is one Agent facade per application process. `createAgent()` constructs
@@ -166,13 +168,19 @@ authenticated, valid, selectable, or the default.
 OpenAI-compatible requests to `http://host.docker.internal:4000/v1`, treats the
 LiteLLM master key as its API-token credential, and reports only model IDs that
 are both returned by the proxy's authenticated `/models` endpoint and mapped to
-known Agent model metadata. The proxy owns the upstream GitHub Copilot login;
+the standalone `@loopiq/ai` provider's supported model metadata. The proxy owns
+the upstream GitHub Copilot login;
 the isolated Agent and Harbor trial never perform Copilot OAuth. This endpoint
 is intentionally local-Docker-specific and is not a cloud Harbor transport.
 
 The supported-provider set is Agent application policy. Adding another
 built-in provider later changes this table and the Agent-owned registration
-list; it does not add provider assembly code to CLI or Server.
+list; it does not add provider assembly code to CLI or Server. Concrete
+provider factories come from `@loopiq/ai` provider subpaths. The
+`litellm-copilot` factory and its authenticated discovery helper are kept
+together in `providers/litellm-copilot.ts`; the Agent imports that module
+directly without adding a forwarding wrapper or coupling it to the generated
+global catalog.
 
 ### D3. Public Agent construction has no persistence-location option
 
@@ -375,7 +383,8 @@ Ownership is:
 
 | Data | Owner | Persistence |
 | --- | --- | --- |
-| Supported provider implementations | `ModelRuntime` | Application code |
+| Supported Provider set and registration policy | `ModelRuntime` | Agent application code |
+| Concrete Provider factory implementations | `@loopiq/ai` | Provider modules |
 | Optional global default model | Agent settings | `agent.json` |
 | Global default thinking level | Agent settings | `agent.json` |
 | Safe Provider request policy | Agent settings | `agent.json` |
@@ -936,6 +945,9 @@ include secrets or sensitive provider response headers.
 The implementation uses this ownership:
 
 ```text
+packages/ai/src/providers/
+  litellm-copilot.ts
+
 packages/agent/src/
   agent.ts
   create-agent.ts
@@ -955,11 +967,13 @@ packages/agent/src/
     json-file.ts
 ```
 
-Provider and credential behavior belongs under `model/`; Agent-wide settings
-belong under `configuration/`; Session behavior belongs under `session/`.
-Shared persistence files are dependency-leaf primitives and import no business
-types. Platform usage does not justify a top-level technical bucket. No file is
-added or changed under `packages/ai`.
+The local LiteLLM Provider implementation and discovery protocol are isolated
+in the `@loopiq/ai` provider module. Agent application registration, dynamic
+catalog orchestration, and credential behavior belong under `model/`;
+Agent-wide settings belong under `configuration/`; Session behavior belongs
+under `session/`. Shared persistence files are dependency-leaf primitives and
+import no business types. Platform usage does not justify a top-level technical
+bucket.
 
 ## Implementation Record
 
@@ -984,6 +998,9 @@ added or changed under `packages/ai`.
     implemented.
 12. Run build, type checking, unit tests, CLI integration tests, Server tests,
     and a shared-Agent-Home cross-process credential test.
+13. Move the local LiteLLM Copilot factory and discovery helper into one
+    standalone `@loopiq/ai` provider module while retaining Agent ownership of
+    supported-provider registration and dynamic catalog orchestration.
 
 Future changes to this behavior must update
 [`multi-session-runtime.md`](./multi-session-runtime.md),

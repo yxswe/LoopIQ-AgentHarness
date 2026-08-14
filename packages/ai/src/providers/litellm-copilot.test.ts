@@ -3,7 +3,7 @@ import {
 	createLitellmCopilotProvider,
 	discoverLitellmCopilotModelIds,
 	LITELLM_COPILOT_BASE_URL,
-} from "./litellm-copilot-provider.ts";
+} from "./litellm-copilot.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 

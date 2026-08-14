@@ -10,7 +10,9 @@ relevant section here in the same change.
 LoopIQ Agent is a TypeScript monorepo (npm workspaces, `packages/*`) that
 implements one Agent application with HTTP, CLI, and DevUI adapters:
 
-- `@loopiq/ai` — externally sourced, read-only model/provider dependency.
+- `@loopiq/ai` — externally sourced model/provider core. Repository-specific
+  changes are normally prohibited; the local LiteLLM Copilot integration is an
+  explicit exception isolated to one provider module.
 - Agent (`packages/agent`, private workspace `@loopiq/agent`) — the application
   composition root plus turn loop, Session persistence, tools, and events.
 - `@loopiq/server` (`packages/server`) — a Bun HTTP server (DevUI backend) that
@@ -52,6 +54,10 @@ Purpose: provider-agnostic LLM API with model discovery and streaming.
 - `src/api/` — per-provider API implementations (anthropic-messages,
   openai-responses, bedrock, google, mistral, azure, ...).
 - `src/providers/` — provider configs across many clouds.
+- `src/providers/litellm-copilot.ts` — isolated local-Docker LiteLLM Copilot
+  provider, including its supported catalog mapping and authenticated `/models`
+  discovery. It is exported through the existing provider subpath pattern and
+  is not added to the generated global catalog.
 - `src/auth/` — credential store and OAuth flows.
 - `src/utils/` — event streams, JSON parsing, retry, validation, diagnostics.
 - Generated catalogs: `models.generated.ts`, `image-models.generated.ts`.
@@ -108,11 +114,8 @@ and runtime model switching are documented in
 - `model/builtin-providers.ts` — the application-supported provider registry:
   GitHub Copilot, the local LiteLLM Copilot proxy, OpenAI Codex, OpenAI,
   Anthropic, Google, OpenRouter, DeepSeek, Moonshot AI CN, MiniMax CN, Z.AI
-  Coding CN, and Kimi For Coding.
-- `model/litellm-copilot-provider.ts` — Agent-owned adapter for the local
-  Docker LiteLLM proxy at `host.docker.internal:4000`. It uses API-token auth,
-  OpenAI-compatible chat completions, and live `/models` discovery intersected
-  with the Agent's supported proxy catalog. It does not modify `@loopiq/ai`.
+  Coding CN, and Kimi For Coding. The LiteLLM factory is imported directly from
+  the isolated `@loopiq/ai/providers/litellm-copilot` module.
 - `model/provider-types.ts` — serializable Agent-facing provider, model, and
   credential-interaction contracts. Adapter APIs never expose `@loopiq/ai`
   runtime objects.

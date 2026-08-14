@@ -4,13 +4,13 @@ import { deepseekProvider } from "@loopiq/ai/providers/deepseek";
 import { githubCopilotProvider } from "@loopiq/ai/providers/github-copilot";
 import { googleProvider } from "@loopiq/ai/providers/google";
 import { kimiCodingProvider } from "@loopiq/ai/providers/kimi-coding";
+import { createLitellmCopilotProvider } from "@loopiq/ai/providers/litellm-copilot";
 import { minimaxCnProvider } from "@loopiq/ai/providers/minimax-cn";
 import { moonshotaiCnProvider } from "@loopiq/ai/providers/moonshotai-cn";
 import { openaiProvider } from "@loopiq/ai/providers/openai";
 import { openaiCodexProvider } from "@loopiq/ai/providers/openai-codex";
 import { openrouterProvider } from "@loopiq/ai/providers/openrouter";
 import { zaiCodingCnProvider } from "@loopiq/ai/providers/zai-coding-cn";
-import { createLitellmCopilotProvider } from "./litellm-copilot-provider.ts";
 import type { ProviderAuthMethod } from "./provider-types.ts";
 
 export interface BuiltinProviderRegistration {

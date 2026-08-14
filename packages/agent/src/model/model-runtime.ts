@@ -7,15 +7,15 @@ import {
 	type Models,
 	type MutableModels,
 } from "@loopiq/ai";
-import type { ModelReference } from "../base/options.ts";
-import { AgentRuntimeError, toError } from "../base/types.ts";
-import type { BuiltinProviderRegistration } from "./builtin-providers.ts";
-import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtin-providers.ts";
 import {
 	createLitellmCopilotProvider,
 	discoverLitellmCopilotModelIds,
 	LITELLM_COPILOT_PROVIDER_ID,
-} from "./litellm-copilot-provider.ts";
+} from "@loopiq/ai/providers/litellm-copilot";
+import type { ModelReference } from "../base/options.ts";
+import { AgentRuntimeError, toError } from "../base/types.ts";
+import type { BuiltinProviderRegistration } from "./builtin-providers.ts";
+import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtin-providers.ts";
 import type {
 	AddProviderCredentialOptions,
 	ListModelsOptions,
