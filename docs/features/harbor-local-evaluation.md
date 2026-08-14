@@ -1,9 +1,9 @@
 # Harbor Local Evaluation Integration
 
-**Status:** Phase 1 complete; Phase 2 core implemented, with immutable packaging
-and a real Harbor container smoke trial still pending
+**Status:** Phase 1 complete; Phase 2 core and a real clean-container smoke trial
+complete, with immutable packaging and smoke automation still pending
 
-**Reviewed:** 2026-08-12
+**Reviewed:** 2026-08-14
 
 **Initial transport:** LoopIQ CLI in one Harbor trial container
 
@@ -251,8 +251,10 @@ compaction, event repair, or reward calculation.
   than accepting an arbitrary Git revision; then replace source checkout/build
   with a pinned immutable package or image and record its digest together with
   Node, task, verifier, and model identity.
-- [ ] Run and automate a real clean-container Harbor smoke trial; current tests
-  execute the local supervisor, not Harbor's complete lifecycle.
+- [x] Run a real clean-container Harbor smoke trial through Harbor's complete
+  lifecycle.
+- [ ] Automate the clean-container Harbor smoke trial; current automated tests
+  execute the local supervisor rather than Harbor's complete lifecycle.
 
 The pinned configuration shape remains:
 
@@ -260,10 +262,10 @@ The pinned configuration shape remains:
 agent:
   import_path: integrations.harbor.loopiq:LoopIQ
   model_name: openai/gpt-5.2
-  override_timeout_sec: 330
+  override_timeout_sec: 930
   kwargs:
     version: "<full-loopiq-git-sha>"
-    inner_timeout_sec: 300
+    inner_timeout_sec: 900
     shutdown_grace_sec: 10
   env:
     LOOPIQ_API_TOKEN: "${LOOPIQ_API_TOKEN}"
@@ -278,6 +280,15 @@ as `LOOPIQ_API_TOKEN`. The Agent talks to
 trial container itself. LiteLLM owns upstream Copilot authentication, while the
 Harbor trial stores only its isolated proxy credential. This path is local
 Docker only and is not expected to work from a cloud sandbox.
+
+The 2026-08-14 clean-container smoke used LoopIQ revision `ba39579`, Harbor
+revision `cc4b7be`, model `litellm-copilot/gpt-5.6-sol`, and Terminal-Bench 2.0
+task `gpt2-codegolf`. Provider setup, model discovery, CLI execution, native
+terminal validation, artifact collection, and verifier execution completed
+without an exception. The task reward was `0.0`, which is a task-solution
+result rather than an integration failure. A 300-second inner deadline was too
+short; the successful Run took 593,764 ms, so the example keeps explicit slack
+between the inner and outer deadlines.
 
 ## 5. Stable CLI JSONL Protocol
 
@@ -443,7 +454,7 @@ summary.
 | Phase | Goal | Status |
 | --- | --- | --- |
 | 1. Honest CLI contract | Executable bin, help/version, strict grammar, visible errors, cleanup/exit codes, real process tests | Complete |
-| 2. Harbor smoke evaluation | Pinned installation, isolated HOME, non-interactive setup, stable JSONL, supervisor, manifest, `SUPPORTS_ATIF = False`, real container smoke | In progress: core implemented; immutable artifact, explicit `0600`, and real smoke remain |
+| 2. Harbor smoke evaluation | Pinned installation, isolated HOME, non-interactive setup, stable JSONL, supervisor, manifest, `SUPPORTS_ATIF = False`, real container smoke | In progress: core and real smoke complete; immutable artifact, explicit `0600`, and automated smoke remain |
 | 3. Reliable evaluation | Agent deadlines/budgets, background-process ownership, complete usage/cost, bounded output/backpressure, failure/timeout/kill E2E coverage | Not started |
 | 4. ATIF | Harbor-side conversion and validation, then `SUPPORTS_ATIF = True` | Not started |
 
