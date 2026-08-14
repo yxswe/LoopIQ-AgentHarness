@@ -182,11 +182,13 @@ together in `providers/litellm-copilot.ts`; the Agent imports that module
 directly without adding a forwarding wrapper or coupling it to the generated
 global catalog.
 
-The supported catalog contains the local `gpt-5.6-sol` alias that is both
-advertised by `/models` and accepted by an actual completion request. Raw
-`github_copilot/*` entries remain excluded: the proxy advertises them but its
-current upstream integration rejects them at request time. The alias uses the
-proxy-advertised 1,050,000-token input window and 128,000-token output limit.
+The supported catalog is restricted to GPT-family models that are both
+advertised by `/models` and accepted by an actual completion request. The
+2026-08-14 probe confirmed `github_copilot/gpt-4.1`,
+`github_copilot/gpt-5-mini`, and the local `gpt-5.6-sol` alias. Other advertised
+GPT IDs remain excluded when their completion probe returns HTTP 400. The local
+alias uses the proxy-advertised 1,050,000-token input window and 128,000-token
+output limit.
 
 ### D3. Public Agent construction has no persistence-location option
 

@@ -7,7 +7,28 @@ import { GITHUB_COPILOT_MODELS } from "./github-copilot.models.ts";
 export const LITELLM_COPILOT_PROVIDER_ID = "litellm-copilot";
 export const LITELLM_COPILOT_BASE_URL = "http://host.docker.internal:4000/v1";
 
+const MODEL_SOURCES = [
+	["github_copilot/gpt-4.1", GITHUB_COPILOT_MODELS["gpt-4.1"]],
+	["github_copilot/gpt-5-mini", GITHUB_COPILOT_MODELS["gpt-5-mini"]],
+] as const;
+
 const MODELS = [
+	...MODEL_SOURCES.map(([id, source]) => ({
+		...source,
+		id,
+		api: "openai-completions" as const,
+		provider: LITELLM_COPILOT_PROVIDER_ID,
+		baseUrl: LITELLM_COPILOT_BASE_URL,
+		headers: undefined,
+		compat: {
+			supportsStore: false,
+			supportsDeveloperRole: false,
+			supportsReasoningEffort: source.reasoning,
+			supportsUsageInStreaming: true,
+			supportsLongCacheRetention: false,
+		},
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	})),
 	{
 		...GITHUB_COPILOT_MODELS["gpt-5.5"],
 		id: "gpt-5.6-sol",
