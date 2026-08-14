@@ -233,7 +233,9 @@ They must not own Provider calls, Session persistence, tool execution, context
 compaction, event repair, or reward calculation.
 
 - [x] The adapter requires a non-empty LoopIQ Git revision, performs a detached
-  shallow checkout of that revision, and verifies the built `loopiq` executable.
+  shallow checkout of that revision, builds the workspaces, and verifies the
+  compiled CLI workspace entry directly. It does not assume npm creates a root
+  `node_modules/.bin/loopiq` link for the private CLI workspace.
 - [x] Setup uses Agent's normal `providers add` and `models list` operations.
 - [x] The supervisor starts a new process session and manages the entire process
   group rather than only the CLI PID.
@@ -270,8 +272,7 @@ environment:
 ```
 
 For local Docker evaluation through the developer's authenticated LiteLLM
-Copilot proxy, use the full proxy model ID, for example
-`litellm-copilot/github_copilot/gpt-5.3-codex`, and pass the LiteLLM master key
+Copilot proxy, use `litellm-copilot/gpt-5.6-sol` and pass the LiteLLM master key
 as `LOOPIQ_API_TOKEN`. The Agent talks to
 `http://host.docker.internal:4000/v1`; `localhost` would refer to the Harbor
 trial container itself. LiteLLM owns upstream Copilot authentication, while the

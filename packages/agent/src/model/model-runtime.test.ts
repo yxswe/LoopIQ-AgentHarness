@@ -225,9 +225,7 @@ describe("ModelRuntime", () => {
 		const registration = BUILTIN_PROVIDER_REGISTRATIONS.find((provider) => provider.id === "litellm-copilot")!;
 		const runtime = new ModelRuntime({ credentials, registrations: [registration] });
 
-		expect((await runtime.listModels("litellm-copilot")).map((model) => model.modelId)).toEqual([
-			"github_copilot/gpt-5.3-codex",
-		]);
+		expect((await runtime.listModels("litellm-copilot")).map((model) => model.modelId)).toEqual(["gpt-5.6-sol"]);
 	});
 
 	it("validates before persisting and removes only the credential", async () => {

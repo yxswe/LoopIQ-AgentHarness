@@ -7,34 +7,28 @@ import { GITHUB_COPILOT_MODELS } from "./github-copilot.models.ts";
 export const LITELLM_COPILOT_PROVIDER_ID = "litellm-copilot";
 export const LITELLM_COPILOT_BASE_URL = "http://host.docker.internal:4000/v1";
 
-const MODEL_SOURCES = [
-	["github_copilot/claude-sonnet-4.5", GITHUB_COPILOT_MODELS["claude-sonnet-4.5"]],
-	["github_copilot/gpt-4.1", GITHUB_COPILOT_MODELS["gpt-4.1"]],
-	["github_copilot/gemini-2.5-pro", GITHUB_COPILOT_MODELS["gemini-2.5-pro"]],
-	["github_copilot/gpt-5.2", GITHUB_COPILOT_MODELS["gpt-5.2"]],
-	["github_copilot/claude-haiku-4.5", GITHUB_COPILOT_MODELS["claude-haiku-4.5"]],
-	["github_copilot/gpt-5.3-codex", GITHUB_COPILOT_MODELS["gpt-5.3-codex"]],
-	["github_copilot/claude-opus-4.5", GITHUB_COPILOT_MODELS["claude-opus-4.5"]],
-	["github_copilot/claude-sonnet-4", GITHUB_COPILOT_MODELS["claude-sonnet-4"]],
-	["github_copilot/gpt-5-mini", GITHUB_COPILOT_MODELS["gpt-5-mini"]],
-] as const;
-
-const MODELS: readonly Model<"openai-completions">[] = MODEL_SOURCES.map(([id, source]) => ({
-	...source,
-	id,
-	api: "openai-completions",
-	provider: LITELLM_COPILOT_PROVIDER_ID,
-	baseUrl: LITELLM_COPILOT_BASE_URL,
-	headers: undefined,
-	compat: {
-		supportsStore: false,
-		supportsDeveloperRole: false,
-		supportsReasoningEffort: true,
-		supportsUsageInStreaming: true,
-		supportsLongCacheRetention: false,
+const MODELS = [
+	{
+		...GITHUB_COPILOT_MODELS["gpt-5.5"],
+		id: "gpt-5.6-sol",
+		name: "GPT-5.6 SOL",
+		api: "openai-completions",
+		provider: LITELLM_COPILOT_PROVIDER_ID,
+		baseUrl: LITELLM_COPILOT_BASE_URL,
+		headers: undefined,
+		reasoning: true,
+		contextWindow: 1_050_000,
+		maxTokens: 128_000,
+		compat: {
+			supportsStore: false,
+			supportsDeveloperRole: false,
+			supportsReasoningEffort: true,
+			supportsUsageInStreaming: true,
+			supportsLongCacheRetention: false,
+		},
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	},
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-}));
+] satisfies readonly Model<"openai-completions">[];
 
 export function createLitellmCopilotProvider(availableModelIds?: ReadonlySet<string>): Provider<"openai-completions"> {
 	return createProvider({

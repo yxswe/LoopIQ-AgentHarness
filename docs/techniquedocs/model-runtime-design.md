@@ -182,13 +182,11 @@ together in `providers/litellm-copilot.ts`; the Agent imports that module
 directly without adding a forwarding wrapper or coupling it to the generated
 global catalog.
 
-The supported IDs use the exact names advertised by the local proxy, including
-the `github_copilot/` prefix. A Harbor reference therefore contains both the
-LoopIQ Provider ID and the complete proxy model ID, for example
-`litellm-copilot/github_copilot/gpt-5.3-codex`. The CLI and Harbor adapter split
-only the first slash, so the remaining value is preserved as the model ID sent
-to LiteLLM. Proxy models without corresponding local capability metadata remain
-excluded even when `/models` advertises them.
+The supported catalog contains the local `gpt-5.6-sol` alias that is both
+advertised by `/models` and accepted by an actual completion request. Raw
+`github_copilot/*` entries remain excluded: the proxy advertises them but its
+current upstream integration rejects them at request time. The alias uses the
+proxy-advertised 1,050,000-token input window and 128,000-token output limit.
 
 ### D3. Public Agent construction has no persistence-location option
 
@@ -361,7 +359,9 @@ Verification is an authenticated online operation. Local parsing or successful
 `Models.getAuth()` resolution alone cannot prove that a remote provider accepts
 the credential. Each registered provider therefore has an Agent-owned
 validation strategy, such as a provider-native authenticated status/catalog
-request or a minimal validation request against a designated model.
+request or a minimal validation request against a designated model. The latter
+permits up to 16 output tokens, remaining small while satisfying the minimum
+accepted by the local LiteLLM Copilot alias.
 
 Validation results are time-bound and include `validatedAt`. They may be cached
 in memory for a short TTL, but each cache entry is bound to the exact persisted

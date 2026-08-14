@@ -376,7 +376,7 @@ export class ModelRuntime {
 					systemPrompt: "This is an authentication validation request. Reply with OK.",
 					messages: [{ role: "user", content: "OK", timestamp: Date.now() }],
 				},
-				{ maxTokens: 1, maxRetries: 0, timeoutMs: 10_000, signal },
+				{ maxTokens: 16, maxRetries: 0, timeoutMs: 10_000, signal },
 			);
 			const finalCredential = (await temporaryCredentials.read(registration.id)) ?? credential;
 			if (response.stopReason !== "error" && response.stopReason !== "aborted") {

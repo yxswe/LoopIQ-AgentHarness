@@ -37,6 +37,7 @@ class LoopIQ(BaseInstalledAgent):
     ]
 
     _INSTALL_DIR = PurePosixPath("/installed-agent/loopiq")
+    _CLI_PATH = _INSTALL_DIR / "packages/cli/dist/cli.js"
     _AGENT_HOME = PurePosixPath("/tmp/loopiq-home")
     _INSTRUCTION_PATH = PurePosixPath("/tmp/loopiq-instruction.txt")
     _TOKEN_PATH = PurePosixPath("/tmp/loopiq-api-token.txt")
@@ -84,6 +85,7 @@ class LoopIQ(BaseInstalledAgent):
             ("curl", "bash", "git", "ca_certificates", "python3", "procps"),
         )
         install_dir = shlex.quote(self._INSTALL_DIR.as_posix())
+        cli_path = shlex.quote(self._CLI_PATH.as_posix())
         repository = shlex.quote(self._repository_url)
         revision = shlex.quote(self._version)
         await self.exec_as_agent(
@@ -96,7 +98,8 @@ class LoopIQ(BaseInstalledAgent):
                 f"git -C {install_dir} remote add origin {repository} && "
                 f"git -C {install_dir} fetch --depth 1 origin {revision} && "
                 f"git -C {install_dir} checkout --detach FETCH_HEAD && "
-                f"cd {install_dir} && npm ci && npm run build && ./node_modules/.bin/loopiq --version"
+                f"cd {install_dir} && npm ci && npm run build && "
+                f"chmod 755 {cli_path} && {cli_path} --version"
             ),
         )
         node_result = await self.exec_as_agent(
@@ -113,7 +116,7 @@ class LoopIQ(BaseInstalledAgent):
             command=(
                 "set -euo pipefail; "
                 f"ln -sf {shlex.quote(node_path)} /usr/local/bin/node; "
-                f"ln -sf {install_dir}/node_modules/.bin/loopiq /usr/local/bin/loopiq"
+                f"ln -sf {cli_path} /usr/local/bin/loopiq"
             ),
         )
 
