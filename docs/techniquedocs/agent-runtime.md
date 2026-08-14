@@ -176,8 +176,11 @@ made while running replace one pending configuration snapshot and flush at the
 next save point; idle changes append before returning.
 
 `AgentSettings` owns the loaded snapshot whose durable `agent.json` form
-optionally contains the atomic default provider/model pair, the default thinking
-level (`high` when first created), and the safe Provider request policy. Default
+optionally contains the atomic default provider/model pair and one non-secret
+custom OpenAI-compatible endpoint/model definition, plus the default thinking
+level (`high` when first created) and the safe Provider request policy. The
+custom definition is loaded only during Agent construction; changing it means
+editing the local file while the Agent is stopped and restarting. Default
 model and thinking changes affect only new Sessions;
 existing Sessions retain their JSONL-persisted values. Creating a new Session
 without either an explicit or configured default model fails before the Session

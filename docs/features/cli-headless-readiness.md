@@ -42,7 +42,7 @@ overrides with exit code `2`.
 | Interactive | `chat [initial prompt]` with `/help`, `/sessions`, `/new`, `/model`, `/thinking`, and `/exit` |
 | Session selection | `--session ID` selects one exact Session; `--continue` selects the most recently updated Session in the requested Workspace |
 | Session management | `sessions list/delete`; Session creation belongs to `run` and `chat` |
-| Models and Providers | local `providers list`, explicit `providers validate`, `providers add/remove`, and `models list [PROVIDER] [--refresh]`; unscoped listing includes only credential-backed Providers, while included GitHub Copilot and local LiteLLM Copilot listings refresh their current available-model intersections |
+| Models and Providers | local `providers list`, explicit `providers validate`, `providers add/remove`, and `models list [PROVIDER] [--refresh]`; unscoped listing includes only credential-backed Providers, while included GitHub Copilot listings refresh their current available-model intersections and configured `custom-openai` listing is local and static |
 | Non-interactive credential input | `providers add ID --token-stdin`; the token is read from stdin and is never placed in process arguments |
 | Configuration | `config get`, `set-model`, `set-thinking`, and `set-provider-request` |
 | Output | human text, one terminal JSON object, or a versioned JSONL event stream |
@@ -58,9 +58,10 @@ Selection and validation failures leave both the previous credential and Agent
 default model unchanged. A later credential replacement does not prompt for a
 model again.
 
-`litellm-copilot` is the local Docker evaluation Provider. Its API token is the
-LiteLLM master key, and model listing reads the authenticated proxy `/models`
-endpoint rather than performing GitHub OAuth in the CLI process.
+`custom-openai` is conditionally registered from the local `agent.json`
+`customProvider` object. Its API token is managed through the ordinary
+`providers add custom-openai --auth-method api_token` flow. Model listing uses
+the configured model directly and does not call the endpoint's `/models` route.
 
 ### Session Semantics
 

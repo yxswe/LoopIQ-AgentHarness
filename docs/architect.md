@@ -11,8 +11,8 @@ LoopIQ Agent is a TypeScript monorepo (npm workspaces, `packages/*`) that
 implements one Agent application with HTTP, CLI, and DevUI adapters:
 
 - `@loopiq/ai` — externally sourced model/provider core. Repository-specific
-  changes are normally prohibited; the local LiteLLM Copilot integration is an
-  explicit exception isolated to one provider module.
+  changes are normally prohibited; the configurable OpenAI-compatible
+  integration is an explicit exception isolated to one provider module.
 - Agent (`packages/agent`, private workspace `@loopiq/agent`) — the application
   composition root plus turn loop, Session persistence, tools, and events.
 - `@loopiq/server` (`packages/server`) — a Bun HTTP server (DevUI backend) that
@@ -54,10 +54,11 @@ Purpose: provider-agnostic LLM API with model discovery and streaming.
 - `src/api/` — per-provider API implementations (anthropic-messages,
   openai-responses, bedrock, google, mistral, azure, ...).
 - `src/providers/` — provider configs across many clouds.
-- `src/providers/litellm-copilot.ts` — isolated local-Docker LiteLLM Copilot
-  provider, including its supported catalog mapping and authenticated `/models`
-  discovery. It is exported through the existing provider subpath pattern and
-  is not added to the generated global catalog.
+- `src/providers/custom-openai.ts` — isolated configurable Chat Completions
+  provider. It creates exactly the endpoint and model supplied by Agent
+  configuration, uses conservative compatibility flags, and performs no remote
+  catalog discovery. It is exported through the existing provider subpath
+  pattern and is not added to the generated global catalog.
 - `src/auth/` — credential store and OAuth flows.
 - `src/utils/` — event streams, JSON parsing, retry, validation, diagnostics.
 - Generated catalogs: `models.generated.ts`, `image-models.generated.ts`.
@@ -112,10 +113,11 @@ and runtime model switching are documented in
   model discovery and first-login validation-model selection, and a
   credential-bound online validation cache.
 - `model/builtin-providers.ts` — the application-supported provider registry:
-  GitHub Copilot, the local LiteLLM Copilot proxy, OpenAI Codex, OpenAI,
-  Anthropic, Google, OpenRouter, DeepSeek, Moonshot AI CN, MiniMax CN, Z.AI
-  Coding CN, and Kimi For Coding. The LiteLLM factory is imported directly from
-  the isolated `@loopiq/ai/providers/litellm-copilot` module.
+  GitHub Copilot, OpenAI Codex, OpenAI, Anthropic, Google, OpenRouter, DeepSeek,
+  Moonshot AI CN, MiniMax CN, Z.AI Coding CN, and Kimi For Coding, plus a
+  `custom-openai` registration only when local Agent configuration defines it.
+  The custom factory is imported directly from the isolated
+  `@loopiq/ai/providers/custom-openai` module.
 - `model/provider-types.ts` — serializable Agent-facing provider, model, and
   credential-interaction contracts. Adapter APIs never expose `@loopiq/ai`
   runtime objects.
@@ -139,9 +141,10 @@ credential validation, token refresh, or other network request. Tests may use
 an internal construction helper with a temporary Agent Home; this override is
 not part of the adapter-facing API.
 
-`agent.json` optionally stores the Agent-wide default model and always stores
-the default thinking level and safe Provider request policy (`transport`,
-timeout, Provider retry count and delay cap, and cache retention). Agent
+`agent.json` optionally stores the Agent-wide default model and one non-secret
+custom OpenAI-compatible endpoint/model definition, and always stores the
+default thinking level and safe Provider request policy (`transport`, timeout,
+Provider retry count and delay cap, and cache retention). Agent
 construction does not require a default model; a new Session must supply one
 explicitly when none is configured. The compiled defaults use thinking level
 `high`, transport `auto`, a five-minute timeout, zero Provider retries, a
@@ -325,8 +328,9 @@ Agent APIs. Provider listing is local by default. An unscoped model listing
 includes only Providers with persisted credentials; an explicitly scoped model
 listing can inspect any registered Provider. Credential validation and model
 refresh are explicit network operations except that every included GitHub
-Copilot or local LiteLLM Copilot listing refreshes its current available-model
-intersection. On the
+Copilot listing refreshes its current available-model intersection. The
+configured custom Provider has one static local model and never calls
+`/models`. On the
 first GitHub Copilot OAuth login, the CLI renders the Agent-provided model
 selection prompt; it does not implement model discovery or validation.
 API-token authentication can read a bounded secret from stdin for automation.

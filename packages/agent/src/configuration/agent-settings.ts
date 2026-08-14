@@ -49,6 +49,9 @@ export class AgentSettings {
 			...(defaultModel ? { defaultModel: structuredClone(defaultModel) } : {}),
 			defaultThinkingLevel: update.defaultThinkingLevel ?? this.configuration.defaultThinkingLevel,
 			providerRequest: this.mergeProviderRequestPolicy(update.providerRequest),
+			...(this.configuration.customProvider
+				? { customProvider: structuredClone(this.configuration.customProvider) }
+				: {}),
 		};
 		this.configuration = await this.store.update(nextConfiguration);
 		return this.getSnapshot();

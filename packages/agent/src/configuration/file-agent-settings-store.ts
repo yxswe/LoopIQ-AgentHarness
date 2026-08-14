@@ -9,12 +9,17 @@ function isAgentConfiguration(value: unknown): value is AgentConfiguration {
 	const record = value as Record<string, unknown>;
 	if (
 		Object.keys(record).some(
-			(key) => key !== "defaultModel" && key !== "defaultThinkingLevel" && key !== "providerRequest",
+			(key) =>
+				key !== "defaultModel" &&
+				key !== "defaultThinkingLevel" &&
+				key !== "providerRequest" &&
+				key !== "customProvider",
 		)
 	)
 		return false;
 	const model = record.defaultModel;
 	const providerRequest = record.providerRequest;
+	const customProvider = record.customProvider;
 	return Boolean(
 		(model === undefined ||
 			(typeof model === "object" &&
@@ -40,8 +45,58 @@ function isAgentConfiguration(value: unknown): value is AgentConfiguration {
 			((providerRequest as Record<string, number>).maxRetries ?? -1) >= 0 &&
 			Number.isInteger((providerRequest as Record<string, unknown>).maxRetryDelayMs) &&
 			((providerRequest as Record<string, number>).maxRetryDelayMs ?? -1) >= 0 &&
-			["none", "short", "long"].includes((providerRequest as Record<string, unknown>).cacheRetention as string),
+			["none", "short", "long"].includes((providerRequest as Record<string, unknown>).cacheRetention as string) &&
+			(customProvider === undefined || isCustomProviderConfiguration(customProvider)),
 	);
+}
+
+function isCustomProviderConfiguration(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	if (
+		Object.keys(record).some(
+			(key) =>
+				key !== "baseUrl" &&
+				key !== "modelId" &&
+				key !== "modelName" &&
+				key !== "contextWindow" &&
+				key !== "maxTokens" &&
+				key !== "reasoning",
+		)
+	)
+		return false;
+	if (!isNonEmptyString(record.modelId)) return false;
+	if (record.modelName !== undefined && !isNonEmptyString(record.modelName)) return false;
+	if (record.reasoning !== undefined && typeof record.reasoning !== "boolean") return false;
+	if (record.contextWindow !== undefined && !isPositiveInteger(record.contextWindow)) return false;
+	if (record.maxTokens !== undefined && !isPositiveInteger(record.maxTokens)) return false;
+	if (
+		typeof record.contextWindow === "number" &&
+		typeof record.maxTokens === "number" &&
+		record.maxTokens > record.contextWindow
+	)
+		return false;
+	if (!isNonEmptyString(record.baseUrl) || record.baseUrl !== record.baseUrl.trim()) return false;
+	try {
+		const url = new URL(record.baseUrl);
+		return (
+			(url.protocol === "http:" || url.protocol === "https:") &&
+			!url.username &&
+			!url.password &&
+			!url.search &&
+			!url.hash
+		);
+	} catch {
+		return false;
+	}
+}
+
+function isNonEmptyString(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && value === value.trim();
+}
+
+function isPositiveInteger(value: unknown): value is number {
+	return Number.isInteger(value) && (value as number) > 0;
 }
 
 export class FileAgentSettingsStore {

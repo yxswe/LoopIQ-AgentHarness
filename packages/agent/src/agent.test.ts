@@ -12,6 +12,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import type { Agent } from "./agent.ts";
 import { DEFAULT_PROVIDER_REQUEST_POLICY } from "./base/options.ts";
+import { FileAgentSettingsStore } from "./configuration/file-agent-settings-store.ts";
 import { createAgentForTesting } from "./create-agent.ts";
 import { ModelRuntime } from "./model/model-runtime.ts";
 
@@ -103,7 +104,6 @@ describe("Agent", () => {
 		agents.push(first);
 		expect((await first.listProviders()).map((provider) => provider.providerId)).toEqual([
 			"github-copilot",
-			"litellm-copilot",
 			"openai-codex",
 			"openai",
 			"anthropic",
@@ -137,6 +137,41 @@ describe("Agent", () => {
 			defaultThinkingLevel: "medium",
 			providerRequest: { ...DEFAULT_PROVIDER_REQUEST_POLICY, transport: "sse", timeoutMs: 120_000 },
 		});
+	});
+
+	it("registers a configured OpenAI-compatible endpoint and preserves it across settings updates", async () => {
+		const agentHome = await mkdtemp(join(tmpdir(), "loopiq-agent-custom-openai-"));
+		agentHomes.push(agentHome);
+		const settingsStore = new FileAgentSettingsStore(agentHome);
+		await settingsStore.loadOrCreate({
+			defaultModel: { providerId: "custom-openai", modelId: "vendor/model-a" },
+			defaultThinkingLevel: "high",
+			providerRequest: DEFAULT_PROVIDER_REQUEST_POLICY,
+			customProvider: {
+				baseUrl: "https://example.com/v1",
+				modelId: "vendor/model-a",
+				modelName: "Model A",
+				contextWindow: 200_000,
+				maxTokens: 32_000,
+				reasoning: true,
+			},
+		});
+
+		const first = await createAgentForTesting({ agentHome });
+		agents.push(first);
+		expect((await first.listProviders()).map((provider) => provider.providerId)).toContain("custom-openai");
+		expect(await first.listModels("custom-openai")).toEqual([
+			{
+				providerId: "custom-openai",
+				modelId: "vendor/model-a",
+				name: "Model A",
+				reasoning: true,
+				contextWindow: 200_000,
+				maxTokens: 32_000,
+			},
+		]);
+		await first.updateConfiguration({ defaultThinkingLevel: "medium" });
+		expect((await first.getConfiguration()).customProvider?.modelId).toBe("vendor/model-a");
 	});
 
 	it("applies the current Agent request policy to the next provider request", async () => {

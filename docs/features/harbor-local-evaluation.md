@@ -276,15 +276,28 @@ environment:
 ```
 
 For local Docker evaluation through the developer's authenticated LiteLLM
-Copilot proxy, use `litellm-copilot/gpt-5.6-sol` and pass the LiteLLM master key
-as `LOOPIQ_API_TOKEN`. The Agent talks to
-`http://host.docker.internal:4000/v1`; `localhost` would refer to the Harbor
-trial container itself. LiteLLM owns upstream Copilot authentication, while the
-Harbor trial stores only its isolated proxy credential. This path is local
-Docker only and is not expected to work from a cloud sandbox.
+proxy, use `custom-openai/gpt-5.6-sol`, pass the LiteLLM master key as
+`LOOPIQ_API_TOKEN`, and provide the non-secret custom Provider definition as a
+JSON environment value:
 
-The 2026-08-14 clean-container smoke used LoopIQ revision `ba39579`, Harbor
-revision `cc4b7be`, model `litellm-copilot/gpt-5.6-sol`, and Terminal-Bench 2.0
+```yaml
+env:
+  LOOPIQ_API_TOKEN: "${LOOPIQ_API_TOKEN}"
+  LOOPIQ_CUSTOM_PROVIDER: >-
+    {"baseUrl":"http://host.docker.internal:4000/v1","modelId":"gpt-5.6-sol","modelName":"GPT-5.6 SOL","contextWindow":1050000,"maxTokens":128000,"reasoning":true}
+```
+
+The adapter materializes this object into the isolated trial's `agent.json`
+before adding the API-token credential. The configured model is used directly;
+neither the adapter nor Agent calls `/models` or applies a hard-coded whitelist.
+`localhost` would refer to the Harbor trial container itself. LiteLLM owns
+upstream authentication, while the Harbor trial stores only its isolated proxy
+credential. This path is local Docker only and is not expected to work from a
+cloud sandbox.
+
+The 2026-08-14 pre-migration clean-container smoke used LoopIQ revision
+`ba39579`, Harbor revision `cc4b7be`, model
+`litellm-copilot/gpt-5.6-sol`, and Terminal-Bench 2.0
 task `gpt2-codegolf`. Provider setup, model discovery, CLI execution, native
 terminal validation, artifact collection, and verifier execution completed
 without an exception. The task reward was `0.0`, which is a task-solution

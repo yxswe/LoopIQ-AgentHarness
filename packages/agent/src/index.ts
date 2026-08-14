@@ -20,7 +20,11 @@ export type {
 	ThinkingLevel,
 } from "./base/options.ts";
 export { AgentRuntimeError } from "./base/types.ts";
-export type { AgentConfiguration, AgentConfigurationUpdate } from "./configuration/agent-configuration.ts";
+export type {
+	AgentConfiguration,
+	AgentConfigurationUpdate,
+	CustomProviderConfiguration,
+} from "./configuration/agent-configuration.ts";
 export { createAgent } from "./create-agent.ts";
 export type {
 	AddProviderCredentialOptions,

@@ -28,7 +28,7 @@ class LoopIQ(BaseInstalledAgent):
 
     SUPPORTS_ATIF = True
     SUPPORTS_RESUME = False
-    ADAPTER_VERSION = "0.2.0"
+    ADAPTER_VERSION = "0.3.0"
     HARBOR_COMPATIBILITY_REVISION = "cc4b7be7c1ace2621b38c4e2e13ef736a9bc884f"
 
     CLI_FLAGS: ClassVar[list[CliFlag]] = [
@@ -130,7 +130,7 @@ class LoopIQ(BaseInstalledAgent):
     async def setup(self, environment: BaseEnvironment) -> None:
         if not self.model_name or "/" not in self.model_name:
             raise ValueError("LoopIQ model name must use provider/model format")
-        provider, _ = self.model_name.split("/", 1)
+        provider, model_id = self.model_name.split("/", 1)
         if provider == "openai-codex":
             raise ValueError(
                 "LoopIQ Harbor evaluation does not support OAuth-only Providers"
@@ -139,6 +139,40 @@ class LoopIQ(BaseInstalledAgent):
         if not token:
             raise ValueError(
                 "LOOPIQ_API_TOKEN is required for non-interactive LoopIQ evaluation"
+            )
+        agent_configuration: str | None = None
+        if provider == "custom-openai":
+            custom_provider_text = self._get_env("LOOPIQ_CUSTOM_PROVIDER")
+            if not custom_provider_text:
+                raise ValueError(
+                    "LOOPIQ_CUSTOM_PROVIDER is required for custom-openai evaluation"
+                )
+            try:
+                custom_provider = json.loads(custom_provider_text)
+            except json.JSONDecodeError as error:
+                raise ValueError("LOOPIQ_CUSTOM_PROVIDER must be valid JSON") from error
+            if not isinstance(custom_provider, dict):
+                raise ValueError("LOOPIQ_CUSTOM_PROVIDER must be a JSON object")
+            if custom_provider.get("modelId") != model_id:
+                raise ValueError(
+                    "LOOPIQ_CUSTOM_PROVIDER.modelId must match the Harbor model name"
+                )
+            agent_configuration = json.dumps(
+                {
+                    "defaultModel": {
+                        "providerId": provider,
+                        "modelId": model_id,
+                    },
+                    "defaultThinkingLevel": "high",
+                    "providerRequest": {
+                        "transport": "auto",
+                        "timeoutMs": 300000,
+                        "maxRetries": 0,
+                        "maxRetryDelayMs": 60000,
+                        "cacheRetention": "short",
+                    },
+                    "customProvider": custom_provider,
+                }
             )
         await super().setup(environment)
 
@@ -164,7 +198,25 @@ class LoopIQ(BaseInstalledAgent):
                 command=(
                     f"rm -rf {shlex.quote(self._AGENT_HOME.as_posix())} && "
                     f"mkdir -p {shlex.quote(self._AGENT_HOME.as_posix())} && "
-                    f"chmod 700 {shlex.quote(self._AGENT_HOME.as_posix())} && "
+                    f"chmod 700 {shlex.quote(self._AGENT_HOME.as_posix())}"
+                ),
+                env=env,
+            )
+            if agent_configuration is not None:
+                await self._upload_config_text(
+                    environment,
+                    content=agent_configuration,
+                    remote_path=(self._AGENT_HOME / "agent.json").as_posix(),
+                    filename="loopiq-agent.json",
+                )
+                await self.exec_as_agent(
+                    environment,
+                    command=f"chmod 600 {shlex.quote((self._AGENT_HOME / 'agent.json').as_posix())}",
+                    env=env,
+                )
+            await self.exec_as_agent(
+                environment,
+                command=(
                     f"loopiq providers add {shlex.quote(provider)} --auth-method api_token --token-stdin "
                     f"< {shlex.quote(self._TOKEN_PATH.as_posix())}"
                 ),

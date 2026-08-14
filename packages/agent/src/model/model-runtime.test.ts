@@ -1,9 +1,7 @@
 import { fauxProvider, InMemoryCredentialStore, type Provider } from "@loopiq/ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { BUILTIN_PROVIDER_REGISTRATIONS } from "./builtin-providers.ts";
+import { describe, expect, it } from "vitest";
+import { BUILTIN_PROVIDER_REGISTRATIONS, createBuiltinProviderRegistrations } from "./builtin-providers.ts";
 import { ModelRuntime } from "./model-runtime.ts";
-
-afterEach(() => vi.unstubAllGlobals());
 
 function createCopilotFixture(options?: { availableModelIds?: string[]; refreshError?: Error }) {
 	const credentials = new InMemoryCredentialStore();
@@ -210,34 +208,15 @@ describe("ModelRuntime", () => {
 		});
 	});
 
-	it("lists only models currently advertised by the local LiteLLM Copilot proxy", async () => {
+	it("lists the configured custom model without remote catalog discovery", async () => {
 		const credentials = new InMemoryCredentialStore();
-		await credentials.modify("litellm-copilot", async () => ({ type: "api_key", key: "secret" }));
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(
-				async () =>
-					new Response(
-						JSON.stringify({
-							data: [
-								{ id: "github_copilot/gpt-4.1" },
-								{ id: "github_copilot/gpt-5-mini" },
-								{ id: "github_copilot/gpt-5.3-codex" },
-								{ id: "gpt-5.6-sol" },
-							],
-						}),
-						{ status: 200 },
-					),
-			),
-		);
-		const registration = BUILTIN_PROVIDER_REGISTRATIONS.find((provider) => provider.id === "litellm-copilot")!;
+		const registration = createBuiltinProviderRegistrations({
+			baseUrl: "https://example.com/v1",
+			modelId: "vendor/model-a",
+		}).find((provider) => provider.id === "custom-openai")!;
 		const runtime = new ModelRuntime({ credentials, registrations: [registration] });
 
-		expect((await runtime.listModels("litellm-copilot")).map((model) => model.modelId)).toEqual([
-			"github_copilot/gpt-4.1",
-			"github_copilot/gpt-5-mini",
-			"gpt-5.6-sol",
-		]);
+		expect((await runtime.listModels("custom-openai")).map((model) => model.modelId)).toEqual(["vendor/model-a"]);
 	});
 
 	it("validates before persisting and removes only the credential", async () => {
