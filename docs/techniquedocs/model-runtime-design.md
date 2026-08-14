@@ -182,6 +182,14 @@ together in `providers/litellm-copilot.ts`; the Agent imports that module
 directly without adding a forwarding wrapper or coupling it to the generated
 global catalog.
 
+The supported IDs use the exact names advertised by the local proxy, including
+the `github_copilot/` prefix. A Harbor reference therefore contains both the
+LoopIQ Provider ID and the complete proxy model ID, for example
+`litellm-copilot/github_copilot/gpt-5.3-codex`. The CLI and Harbor adapter split
+only the first slash, so the remaining value is preserved as the model ID sent
+to LiteLLM. Proxy models without corresponding local capability metadata remain
+excluded even when `/models` advertises them.
+
 ### D3. Public Agent construction has no persistence-location option
 
 The public construction surface is:

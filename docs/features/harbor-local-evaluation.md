@@ -270,8 +270,9 @@ environment:
 ```
 
 For local Docker evaluation through the developer's authenticated LiteLLM
-Copilot proxy, use `litellm-copilot/<model>` and pass the LiteLLM master key as
-`LOOPIQ_API_TOKEN`. The Agent talks to
+Copilot proxy, use the full proxy model ID, for example
+`litellm-copilot/github_copilot/gpt-5.3-codex`, and pass the LiteLLM master key
+as `LOOPIQ_API_TOKEN`. The Agent talks to
 `http://host.docker.internal:4000/v1`; `localhost` would refer to the Harbor
 trial container itself. LiteLLM owns upstream Copilot authentication, while the
 Harbor trial stores only its isolated proxy credential. This path is local

@@ -3,19 +3,20 @@ import { envApiKeyAuth } from "../auth/helpers.ts";
 import { createProvider, type Provider } from "../models.ts";
 import type { Model } from "../types.ts";
 import { GITHUB_COPILOT_MODELS } from "./github-copilot.models.ts";
-import { OPENAI_MODELS } from "./openai.models.ts";
 
 export const LITELLM_COPILOT_PROVIDER_ID = "litellm-copilot";
 export const LITELLM_COPILOT_BASE_URL = "http://host.docker.internal:4000/v1";
 
 const MODEL_SOURCES = [
-	["copilot-gpt-4o", OPENAI_MODELS["gpt-4o"]],
-	["copilot-gpt-5.4", GITHUB_COPILOT_MODELS["gpt-5.4"]],
-	["claude-sonnet-5", GITHUB_COPILOT_MODELS["claude-sonnet-5"]],
-	["claude-opus-4.8", GITHUB_COPILOT_MODELS["claude-opus-4.8"]],
-	["claude-haiku-4.5", GITHUB_COPILOT_MODELS["claude-haiku-4.5"]],
-	["gpt-5.5", GITHUB_COPILOT_MODELS["gpt-5.5"]],
-	["gpt-5.3-codex", GITHUB_COPILOT_MODELS["gpt-5.3-codex"]],
+	["github_copilot/claude-sonnet-4.5", GITHUB_COPILOT_MODELS["claude-sonnet-4.5"]],
+	["github_copilot/gpt-4.1", GITHUB_COPILOT_MODELS["gpt-4.1"]],
+	["github_copilot/gemini-2.5-pro", GITHUB_COPILOT_MODELS["gemini-2.5-pro"]],
+	["github_copilot/gpt-5.2", GITHUB_COPILOT_MODELS["gpt-5.2"]],
+	["github_copilot/claude-haiku-4.5", GITHUB_COPILOT_MODELS["claude-haiku-4.5"]],
+	["github_copilot/gpt-5.3-codex", GITHUB_COPILOT_MODELS["gpt-5.3-codex"]],
+	["github_copilot/claude-opus-4.5", GITHUB_COPILOT_MODELS["claude-opus-4.5"]],
+	["github_copilot/claude-sonnet-4", GITHUB_COPILOT_MODELS["claude-sonnet-4"]],
+	["github_copilot/gpt-5-mini", GITHUB_COPILOT_MODELS["gpt-5-mini"]],
 ] as const;
 
 const MODELS: readonly Model<"openai-completions">[] = MODEL_SOURCES.map(([id, source]) => ({

@@ -217,7 +217,7 @@ describe("ModelRuntime", () => {
 			"fetch",
 			vi.fn(
 				async () =>
-					new Response(JSON.stringify({ data: [{ id: "gpt-5.3-codex" }, { id: "gpt-5.6-sol" }] }), {
+					new Response(JSON.stringify({ data: [{ id: "github_copilot/gpt-5.3-codex" }, { id: "gpt-5.6-sol" }] }), {
 						status: 200,
 					}),
 			),
@@ -225,7 +225,9 @@ describe("ModelRuntime", () => {
 		const registration = BUILTIN_PROVIDER_REGISTRATIONS.find((provider) => provider.id === "litellm-copilot")!;
 		const runtime = new ModelRuntime({ credentials, registrations: [registration] });
 
-		expect((await runtime.listModels("litellm-copilot")).map((model) => model.modelId)).toEqual(["gpt-5.3-codex"]);
+		expect((await runtime.listModels("litellm-copilot")).map((model) => model.modelId)).toEqual([
+			"github_copilot/gpt-5.3-codex",
+		]);
 	});
 
 	it("validates before persisting and removes only the credential", async () => {

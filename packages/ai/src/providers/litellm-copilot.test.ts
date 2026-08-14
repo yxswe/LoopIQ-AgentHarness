@@ -9,10 +9,11 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("LiteLLM Copilot provider", () => {
 	it("owns the local proxy identity and exposes only discovered supported models", () => {
-		const provider = createLitellmCopilotProvider(new Set(["copilot-gpt-5.4", "gpt-5.6-sol"]));
+		const provider = createLitellmCopilotProvider(new Set(["github_copilot/gpt-5.3-codex", "gpt-5.6-sol"]));
 		expect(provider.id).toBe("litellm-copilot");
-		expect(provider.getModels().map((model) => model.id)).toEqual(["copilot-gpt-5.4"]);
+		expect(provider.getModels().map((model) => model.id)).toEqual(["github_copilot/gpt-5.3-codex"]);
 		expect(provider.getModels()[0]).toMatchObject({
+			id: "github_copilot/gpt-5.3-codex",
 			provider: "litellm-copilot",
 			baseUrl: LITELLM_COPILOT_BASE_URL,
 			api: "openai-completions",
