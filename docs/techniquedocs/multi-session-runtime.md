@@ -102,7 +102,7 @@ Every facade method performs one delegation to `AgentSessionManager`,
 `ModelRuntime`, or `AgentSettings`; it does not implement cross-owner workflows.
 `createAgent()` is the separate composition root. It asynchronously initializes
 local settings and stores in the single per-user Agent Home (`~/.loopiq`),
-registers the eleven supported providers, creates one `AgentEngine` and one
+registers the supported built-ins and any configured custom Provider, creates one `AgentEngine` and one
 `AgentSessionManager`, wires narrow model and configuration capabilities, and
 returns the facade. Creation does not log in, validate credentials, refresh
 OAuth, or access a provider. The Agent returns serializable summaries,
@@ -290,10 +290,11 @@ explicit `session_config` entries.
 Resume scans physical entry order and uses the latest valid snapshot. Runtime
 configuration entries are excluded from model context.
 
-The global default model, default thinking level, and safe Provider request
+The optional global default model, default thinking level, and safe Provider request
 policy live in `agent.json`. The model may reference a registered Provider
 without a credential. Default model and thinking level affect only new Sessions;
-existing Sessions retain their persisted values. Provider request policy is
+existing Sessions retain their persisted values. A new Session requires an
+explicit model when no default is configured. Provider request policy is
 read for every turn snapshot and therefore affects all Sessions on their next
 Provider request without changing an in-flight request. Headers and metadata
 are not part of the Agent runtime configuration API.
@@ -363,10 +364,20 @@ bootstrap. It does not execute, steer, or abort work implicitly.
 ## CLI Contract
 
 The CLI invokes `Agent` directly and does not require a server. It exposes
-Session commands, provider list/add/remove, model listing, and Agent default
-configuration. Text, JSON, and JSONL modes keep authentication diagnostics off
-machine-readable stdout. Terminal secret prompts disable input echo. SIGINT
-calls `Agent.abort(sessionId, runId)` and waits for settlement.
+strict Session commands, local provider list/add/remove/validate operations,
+model listing/refresh, and Agent default configuration. `run` creates a fresh
+Session unless `--session` or `--continue` is explicit; creation-only
+Workspace/model/thinking flags are rejected for resumed Sessions. `chat`
+creates no Session until state or the first message requires one.
+
+Text, terminal JSON, and the versioned `loopiq.cli.event` JSONL protocol keep
+authentication diagnostics off machine-readable stdout. The CLI subscribes
+before starting a Run, buffers early events until it receives `RunHandle`, and
+emits one external `run_completed` record under normal process control. API
+tokens may be read from bounded stdin for non-interactive setup; terminal
+secret prompts disable input echo. SIGINT/SIGTERM abort an active Run and all
+post-construction paths attempt Agent shutdown. Process-group containment for
+Harbor belongs to `integrations/harbor`, not this Session runtime.
 
 ## Current Limitations
 

@@ -42,6 +42,7 @@ export type AgentRuntimeErrorCode =
 	| "invalid_argument"
 	| "provider_not_found"
 	| "model_not_found"
+	| "model_not_configured"
 	| "provider_auth_required"
 	| "provider_credential_invalid"
 	| "provider_validation_unavailable"

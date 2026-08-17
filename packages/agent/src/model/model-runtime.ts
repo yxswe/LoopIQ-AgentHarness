@@ -42,6 +42,7 @@ export type CredentialValidator = (
 	registration: BuiltinProviderRegistration,
 	credential: Credential,
 	signal?: AbortSignal,
+	modelId?: string,
 ) => Promise<ValidationResult>;
 
 export class ModelRuntime {
@@ -78,7 +79,8 @@ export class ModelRuntime {
 		this.models = this.mutableModels;
 		this.validateCredential =
 			options.validator ??
-			((registration, credential, signal) => this.validateWithProvider(registration, credential, signal));
+			((registration, credential, signal, modelId) =>
+				this.validateWithProvider(registration, credential, signal, modelId));
 	}
 
 	async resolveModel(reference: ModelReference, refresh = true): Promise<Model<any>> {
@@ -101,9 +103,26 @@ export class ModelRuntime {
 	}
 
 	async listModels(providerId?: string, options?: ListModelsOptions): Promise<ModelSummary[]> {
-		if (providerId) this.requireRegistration(providerId);
-		if (options?.refresh) await this.mutableModels.refresh(providerId);
-		return this.mutableModels.getModels(providerId).map((model) => ({
+		const providerIds: string[] = [];
+		if (providerId) {
+			this.requireRegistration(providerId);
+			providerIds.push(providerId);
+		} else {
+			for (const registeredProviderId of this.registrations.keys()) {
+				if (await this.credentials.read(registeredProviderId)) providerIds.push(registeredProviderId);
+			}
+		}
+
+		const models: Model<any>[] = [];
+		for (const configuredProviderId of providerIds) {
+			if (configuredProviderId === "github-copilot") {
+				models.push(...(await this.refreshGitHubCopilotModels()));
+			} else {
+				if (options?.refresh) await this.mutableModels.refresh(configuredProviderId);
+				models.push(...this.mutableModels.getModels(configuredProviderId));
+			}
+		}
+		return models.map((model) => ({
 			providerId: model.provider,
 			modelId: model.id,
 			name: model.name,
@@ -151,16 +170,17 @@ export class ModelRuntime {
 				`Provider ${providerId} does not support ${options.method} credentials`,
 			);
 		}
+		const replacingCredential = (await this.credentials.read(providerId)) !== undefined;
 
 		const provider = registration.create();
 		let candidate: Credential;
 		try {
 			if (options.method === "oauth") {
 				if (!provider.auth.oauth) throw new Error(`Provider ${providerId} has no OAuth implementation`);
-				candidate = await provider.auth.oauth.login(this.toAuthCallbacks(options.interaction));
+				candidate = await provider.auth.oauth.login(this.toAuthCallbacks(providerId, options.interaction));
 			} else {
 				if (!provider.auth.apiKey?.login) throw new Error(`Provider ${providerId} has no API-token login`);
-				candidate = await provider.auth.apiKey.login(this.toAuthCallbacks(options.interaction));
+				candidate = await provider.auth.apiKey.login(this.toAuthCallbacks(providerId, options.interaction));
 			}
 		} catch (error) {
 			if (options.interaction.signal?.aborted) {
@@ -176,7 +196,18 @@ export class ModelRuntime {
 		if (options.interaction.signal?.aborted) {
 			throw new AgentRuntimeError("provider_credential_canceled", `Credential setup canceled for ${providerId}`);
 		}
-		const validation = await this.validateCredential(registration, candidate, options.interaction.signal);
+		const validationModelId = await this.selectGitHubCopilotValidationModel(
+			registration,
+			candidate,
+			options.interaction,
+			!replacingCredential,
+		);
+		const validation = await this.validateCredential(
+			registration,
+			candidate,
+			options.interaction.signal,
+			validationModelId,
+		);
 		if (options.interaction.signal?.aborted) {
 			throw new AgentRuntimeError("provider_credential_canceled", `Credential setup canceled for ${providerId}`);
 		}
@@ -298,10 +329,15 @@ export class ModelRuntime {
 		return { ...status };
 	}
 
-	private toAuthCallbacks(interaction: AddProviderCredentialOptions["interaction"]) {
+	private toAuthCallbacks(providerId: string, interaction: AddProviderCredentialOptions["interaction"]) {
 		return {
 			signal: interaction.signal,
-			prompt: (prompt: ProviderAuthPrompt) => interaction.prompt(prompt),
+			prompt: (prompt: ProviderAuthPrompt) =>
+				providerId === "github-copilot" &&
+				prompt.type === "text" &&
+				prompt.message === "GitHub Enterprise URL/domain (blank for github.com)"
+					? Promise.resolve("")
+					: interaction.prompt(prompt),
 			notify: (event: ProviderAuthEvent) => {
 				void interaction.notify(event);
 			},
@@ -312,12 +348,18 @@ export class ModelRuntime {
 		registration: BuiltinProviderRegistration,
 		credential: Credential,
 		signal?: AbortSignal,
+		modelId?: string,
 	): Promise<ValidationResult> {
 		const temporaryCredentials = new InMemoryCredentialStore();
 		await temporaryCredentials.modify(registration.id, async () => credential);
 		const models = createModels({ credentials: temporaryCredentials });
 		models.setProvider(registration.create());
-		const model = models.getModels(registration.id)[0];
+		const availableModelIds = this.availableModelIds(credential);
+		const model = modelId
+			? models.getModel(registration.id, modelId)
+			: models
+					.getModels(registration.id)
+					.find((candidate) => !availableModelIds || availableModelIds.has(candidate.id));
 		if (!model) return { state: "unavailable", credential, message: "Provider has no validation model" };
 
 		try {
@@ -327,7 +369,7 @@ export class ModelRuntime {
 					systemPrompt: "This is an authentication validation request. Reply with OK.",
 					messages: [{ role: "user", content: "OK", timestamp: Date.now() }],
 				},
-				{ maxTokens: 1, maxRetries: 0, timeoutMs: 10_000, signal },
+				{ maxTokens: 16, maxRetries: 0, timeoutMs: 10_000, signal },
 			);
 			const finalCredential = (await temporaryCredentials.read(registration.id)) ?? credential;
 			if (response.stopReason !== "error" && response.stopReason !== "aborted") {
@@ -343,6 +385,89 @@ export class ModelRuntime {
 			const message = toError(error).message;
 			return { state: AUTH_REJECTION.test(message) ? "invalid" : "unavailable", credential, message };
 		}
+	}
+
+	private async selectGitHubCopilotValidationModel(
+		registration: BuiltinProviderRegistration,
+		credential: Credential,
+		interaction: AddProviderCredentialOptions["interaction"],
+		shouldPrompt: boolean,
+	): Promise<string | undefined> {
+		if (registration.id !== "github-copilot" || credential.type !== "oauth") return undefined;
+		const availableModelIds = this.availableModelIds(credential);
+		const models = this.mutableModels.getModels(registration.id).filter((model) => availableModelIds?.has(model.id));
+		if (models.length === 0) {
+			throw new AgentRuntimeError(
+				"provider_credential_setup_failed",
+				"GitHub Copilot has no account-available models supported by this Agent",
+			);
+		}
+		if (!shouldPrompt) return models[0]!.id;
+
+		let selectedModelId: string;
+		try {
+			selectedModelId = await interaction.prompt({
+				type: "select",
+				message: "Select a GitHub Copilot model",
+				options: models.map((model) => ({ id: model.id, label: model.name })),
+			});
+		} catch (error) {
+			if (interaction.signal?.aborted) {
+				throw new AgentRuntimeError("provider_credential_canceled", "Credential setup canceled for github-copilot");
+			}
+			throw new AgentRuntimeError(
+				"provider_credential_setup_failed",
+				"GitHub Copilot model selection failed",
+				toError(error),
+			);
+		}
+		if (!models.some((model) => model.id === selectedModelId)) {
+			throw new AgentRuntimeError(
+				"provider_credential_setup_failed",
+				`GitHub Copilot model selection returned an unavailable model: ${selectedModelId}`,
+			);
+		}
+		return selectedModelId;
+	}
+
+	private async refreshGitHubCopilotModels(): Promise<readonly Model<any>[]> {
+		const registration = this.requireRegistration("github-copilot");
+		const oauth = registration.create().auth.oauth;
+		if (!oauth) throw new AgentRuntimeError("provider_auth_required", "GitHub Copilot OAuth is unavailable");
+
+		let credential: Credential | undefined;
+		try {
+			credential = await this.credentials.modify(registration.id, async (current) => {
+				if (current?.type !== "oauth") {
+					throw new AgentRuntimeError(
+						"provider_auth_required",
+						"GitHub Copilot model discovery requires a persisted OAuth credential",
+					);
+				}
+				return oauth.refresh(current);
+			});
+		} catch (error) {
+			if (error instanceof AgentRuntimeError) throw error;
+			throw new AgentRuntimeError(
+				"provider_validation_unavailable",
+				"Could not refresh the GitHub Copilot model catalog",
+				toError(error),
+			);
+		}
+
+		const availableModelIds = this.availableModelIds(credential);
+		if (!availableModelIds) {
+			throw new AgentRuntimeError(
+				"provider_validation_unavailable",
+				"GitHub Copilot model discovery returned no available-model catalog",
+			);
+		}
+		return this.mutableModels.getModels(registration.id).filter((model) => availableModelIds.has(model.id));
+	}
+
+	private availableModelIds(credential: Credential | undefined): Set<string> | undefined {
+		if (credential?.type !== "oauth" || !Array.isArray(credential.availableModelIds)) return undefined;
+		return new Set(credential.availableModelIds.filter((id): id is string => typeof id === "string"));
 	}
 
 	private validationError(providerId: string, validation: ValidationResult): AgentRuntimeError {

@@ -10,13 +10,16 @@ relevant section here in the same change.
 LoopIQ Agent is a TypeScript monorepo (npm workspaces, `packages/*`) that
 implements one Agent application with HTTP, CLI, and DevUI adapters:
 
-- `@loopiq/ai` — externally sourced, read-only model/provider dependency.
+- `@loopiq/ai` — externally sourced, read-only model/provider core.
+  Repository-specific Provider composition lives in the Agent model subsystem.
 - Agent (`packages/agent`, private workspace `@loopiq/agent`) — the application
   composition root plus turn loop, Session persistence, tools, and events.
 - `@loopiq/server` (`packages/server`) — a Bun HTTP server (DevUI backend) that
   hosts multiple Sessions on one shared engine and exposes REST/SSE APIs.
 - `@loopiq/devui` — a minimal web UI (static assets) for exercising the server.
 - `@loopiq/cli` — standalone headless and interactive command-line adapter.
+- `integrations/harbor` — Harbor-side import-path adapter and in-container CLI
+  supervisor for isolated local evaluations.
 
 Dependency direction:
 
@@ -24,6 +27,7 @@ Dependency direction:
 @loopiq/server --+
                  +-> Agent -> @loopiq/ai -> [LLM SDKs]
 @loopiq/cli ----+
+Harbor adapter -> @loopiq/cli executable
 ```
 
 `@loopiq/devui` is framework-free static frontend served by `@loopiq/server`.
@@ -99,11 +103,17 @@ and runtime model switching are documented in
 - `model/model-runtime.ts` — owns the `@loopiq/ai` `Models` collection, provider
   registration, model lookup, switchable-model policy, credential state,
   same-Provider credential-mutation exclusion, explicit credential
-  add/validate/remove, OAuth refresh persistence, and a credential-bound online
-  validation cache.
+  add/validate/remove, OAuth refresh persistence, account-aware GitHub Copilot
+  model discovery and first-login validation-model selection, and a
+  credential-bound online validation cache.
 - `model/builtin-providers.ts` — the application-supported provider registry:
   GitHub Copilot, OpenAI Codex, OpenAI, Anthropic, Google, OpenRouter, DeepSeek,
-  Moonshot AI CN, MiniMax CN, Z.AI Coding CN, and Kimi For Coding.
+  Moonshot AI CN, MiniMax CN, Z.AI Coding CN, and Kimi For Coding, plus a
+  `custom-openai` registration only when local Agent configuration defines it.
+- `model/custom-openai.ts` — Agent-owned configurable Chat Completions Provider
+  composed from public `@loopiq/ai` primitives. It creates exactly the endpoint
+  and model supplied by Agent configuration and performs no remote catalog
+  discovery.
 - `model/provider-types.ts` — serializable Agent-facing provider, model, and
   credential-interaction contracts. Adapter APIs never expose `@loopiq/ai`
   runtime objects.
@@ -127,9 +137,12 @@ credential validation, token refresh, or other network request. Tests may use
 an internal construction helper with a temporary Agent Home; this override is
 not part of the adapter-facing API.
 
-`agent.json` stores the Agent-wide default model, default thinking level, and
-safe Provider request policy (`transport`, timeout, Provider retry count and
-delay cap, and cache retention). The compiled defaults use thinking level
+`agent.json` optionally stores the Agent-wide default model and one non-secret
+custom OpenAI-compatible endpoint/model definition, and always stores the
+default thinking level and safe Provider request policy (`transport`, timeout,
+Provider retry count and delay cap, and cache retention). Agent
+construction does not require a default model; a new Session must supply one
+explicitly when none is configured. The compiled defaults use thinking level
 `high`, transport `auto`, a five-minute timeout, zero Provider retries, a
 one-minute retry-delay cap, and short cache retention. Arbitrary request headers
 and metadata are not part of the Agent configuration or runtime API.
@@ -296,15 +309,58 @@ dependency.
 ## Package: `@loopiq/cli`
 
 `packages/cli` provides the `loopiq` executable. It calls only the `Agent`
-entry, accepts an argument or stdin, and renders text, JSON, or JSONL with
-deterministic exit codes. `chat` provides a sequential interactive mode.
-`sessions list/create/delete` use the same durable layout. Authentication
-prompts and diagnostics use stderr so machine-readable stdout stays clean.
-Provider list/add/remove, model list, and Agent configuration commands call
-Agent APIs. Configuration commands cover the default model, default thinking
-level, and Provider request policy. The CLI has no direct `@loopiq/ai`
-dependency. `--workspace` selects the Workspace for a new Session; the CLI
-cannot select another Agent Home.
+entry, uses strict command-specific grammar, accepts a prompt argument or
+bounded stdin, and renders text, one terminal JSON record, or the versioned
+`loopiq.cli.event` JSONL protocol. `run` is non-interactive and creates a fresh
+Session by default; `--session` and `--continue` explicitly resume. `chat`
+provides sequential interaction, delayed Session creation, and explicit
+Session/model/thinking commands. Both surfaces use one small per-Run coordinator
+for subscription, execution, settlement, and unsubscription while retaining
+their different Agent process lifetimes. Explicit Session management exposes
+listing and deletion; creation belongs to `run` and `chat`.
+
+Session, Provider, model, credential, and Agent-configuration commands map to
+Agent APIs. Provider listing is local by default. An unscoped model listing
+includes only Providers with persisted credentials; an explicitly scoped model
+listing can inspect any registered Provider. Credential validation and model
+refresh are explicit network operations except that every included GitHub
+Copilot listing refreshes its current available-model intersection. The
+configured custom Provider has one static local model and never calls
+`/models`. On the
+first GitHub Copilot OAuth login, the CLI renders the Agent-provided model
+selection prompt; it does not implement model discovery or validation.
+API-token authentication can read a bounded secret from stdin for automation.
+Prompts and diagnostics use stderr so machine-readable stdout stays clean.
+`--version --format json` reports CLI/build and event-schema identity. The CLI
+has no direct `@loopiq/ai` dependency. `--workspace` selects the Workspace for
+a new Session; the CLI cannot select another Agent Home.
+
+The implemented contract and remaining long-run limitations are documented in
+[`features/cli-headless-readiness.md`](./features/cli-headless-readiness.md).
+
+## Integration: Harbor Local Evaluation
+
+`integrations/harbor/loopiq.py` is a Harbor installed-agent import-path adapter.
+It installs one pinned LoopIQ revision, retries only classified transient
+network failures during online installation with bounded backoff, creates an
+isolated trial Agent Home, bootstraps an API-token credential through
+`loopiq providers add --token-stdin`, and invokes one fresh `loopiq run` per
+trial. Repository build and version failures are not retried. Harbor types stay
+outside the TypeScript packages.
+
+`integrations/harbor/supervisor.py` owns the evaluation process boundary. It
+redirects stdout/stderr directly to Harbor log files, applies an inner deadline
+with process-group escalation, removes live descendants even after nominal CLI
+exit, validates the versioned CLI stream, and writes one normalized manifest.
+`integrations/harbor/trajectory.py` strictly converts the completed native event
+stream into a Harbor-validated ATIF-v1.7 `trajectory.json`, correlating tool
+results by call ID and preserving the native files as source evidence. It does
+not implement Agent execution policy or scoring. A Server transport remains
+deferred.
+
+The full lifecycle, artifact contract, compatibility reference, and canonical
+branch completion checklist are documented in
+[`features/harbor-local-evaluation.md`](./features/harbor-local-evaluation.md).
 
 ## Package: `@loopiq/devui`
 

@@ -328,6 +328,21 @@ persistence failure, and explicitly dynamic request-state behavior.
 
 ## 4. CLI & headless entrypoint
 
+**Status**: the Phase 0 command boundary is implemented. `loopiq run` supports
+argument/stdin input, fresh or explicitly resumed Sessions, model/thinking
+selection for new Sessions, text/JSON/versioned JSONL output, explicit exit
+codes, and executable end-to-end tests. `chat` supports sequential interaction
+and basic Session/model/thinking commands. The Harbor import-path adapter and
+process-group supervisor are implemented under `integrations/harbor`.
+
+Remaining work belongs to the runtime-hardening and event-delivery items below:
+Agent-owned deadlines/budgets, complete usage including compaction, bounded
+output/backpressure and EPIPE handling, background-process ownership,
+time-bounded signal escalation, immutable distribution artifacts, and full
+Harbor container fixtures. See
+[`features/cli-headless-readiness.md`](./features/cli-headless-readiness.md) and
+[`features/harbor-local-evaluation.md`](./features/harbor-local-evaluation.md).
+
 **Why**: The Agent needs consistent behavior across DevUI and headless use, with
 reliable scripting, automation, and CI behavior.
 
@@ -533,3 +548,55 @@ aborted, and failed Runs; cover subscribe-before-run, subscribe-after-start,
 reconnect/cursor gaps, slow and failing subscribers, per-subscriber ordering,
 bounded overflow, unsubscribe, terminal delivery, and equivalent CLI
 JSONL/Server SSE/DevUI behavior.
+
+## 11. Reproducible `@loopiq/ai` upstream synchronization
+
+**Current baseline**: `packages/ai` is a read-only vendored copy of
+`earendil-works/pi/packages/ai`, currently identified as `@loopiq/ai` version
+`0.80.3`. Normal Agent development must not edit it. The local model catalogs,
+including `providers/*.models.ts` and `models.generated.ts`, determine which
+remotely advertised models the Agent recognizes. A model available to an
+account is therefore still hidden by the Agent until the vendored catalog knows
+that model ID.
+
+**Why**: Provider APIs, OAuth behavior, SDK dependencies, model IDs, context
+limits, capabilities, and generated catalogs change upstream. Ad hoc file
+copying would make the dependency origin and local model list impossible to
+audit or reproduce.
+
+**Scope**:
+- Define one explicitly authorized synchronization workflow from a pinned
+  upstream `earendil-works/pi` commit or release. Record the upstream revision,
+  upstream package version, import date, and any unavoidable LoopIQ packaging
+  overlay in one machine-readable manifest.
+- Keep `packages/ai` read-only during normal feature work. Synchronization must
+  replace it from the pinned upstream source through the documented import
+  workflow; do not hand-edit Provider, OAuth, SDK, or generated-model files in
+  this repository.
+- Decide whether the long-term delivery form remains a vendored subtree or
+  becomes a pinned external package/submodule. Preserve the same reviewable
+  provenance and deterministic lockfile in either form.
+- Run the upstream model-generation process as part of synchronization and
+  include generated model catalogs in the reviewed update. Document which
+  upstream data source generates model IDs, names, context windows, output
+  limits, reasoning flags, and text/image capabilities.
+- Review every update for changes to exports, credential shapes, OAuth refresh,
+  Provider IDs, model schemas, streaming events, request options, and error
+  behavior consumed by Agent. Adapt only the consuming packages when possible.
+- Define a deliberate update cadence and an on-demand path for newly released
+  models. Do not automatically merge unreviewed upstream or generated changes.
+- Make account-aware discovery diagnostics distinguish remote model IDs that
+  are unavailable locally because the vendored catalog is stale, without
+  exposing credentials or authorization responses.
+
+**Observability**: expose the pinned upstream revision and `@loopiq/ai` version
+in build/version diagnostics. Model discovery may report matched and unmatched
+ID counts and a catalog revision, but must not log credentials, authorization
+headers, or complete Provider responses.
+
+**Tests**: verify a clean upstream import is reproducible; generated catalogs
+are clean after regeneration; AI, Agent, CLI, and Server build and test suites
+pass; supported Provider registrations still resolve; credential refresh and
+streaming contracts remain compatible; and fixture-based model discovery proves
+that newly added, removed, remote-only, and locally unknown model IDs are
+handled deterministically.
