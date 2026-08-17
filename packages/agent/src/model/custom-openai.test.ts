@@ -28,7 +28,7 @@ describe("custom OpenAI-compatible provider", () => {
 		});
 	});
 
-	it("uses conservative defaults for generic Chat Completions servers", () => {
+	it("uses the Agent-owned Chat Completions compatibility contract", () => {
 		const model = createCustomOpenAIProvider({
 			baseUrl: "https://example.com/v1",
 			modelId: "chat-model",
@@ -43,8 +43,8 @@ describe("custom OpenAI-compatible provider", () => {
 			compat: {
 				supportsStore: false,
 				supportsDeveloperRole: false,
-				supportsReasoningEffort: false,
-				supportsUsageInStreaming: false,
+				supportsReasoningEffort: true,
+				supportsUsageInStreaming: true,
 				maxTokensField: "max_tokens",
 			},
 		});

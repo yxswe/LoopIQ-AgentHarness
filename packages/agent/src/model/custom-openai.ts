@@ -1,7 +1,5 @@
-import { openAICompletionsApi } from "../api/openai-completions.lazy.ts";
-import { envApiKeyAuth } from "../auth/helpers.ts";
-import { createProvider, type Provider } from "../models.ts";
-import type { Model } from "../types.ts";
+import { createProvider, envApiKeyAuth, type Model, type Provider } from "@loopiq/ai";
+import { openAICompletionsApi } from "@loopiq/ai/api/openai-completions.lazy";
 
 export const CUSTOM_OPENAI_PROVIDER_ID = "custom-openai";
 
@@ -30,8 +28,8 @@ export function createCustomOpenAIProvider(options: CustomOpenAIProviderOptions)
 		compat: {
 			supportsStore: false,
 			supportsDeveloperRole: false,
-			supportsReasoningEffort: false,
-			supportsUsageInStreaming: false,
+			supportsReasoningEffort: true,
+			supportsUsageInStreaming: true,
 			maxTokensField: "max_tokens",
 			supportsStrictMode: false,
 			supportsLongCacheRetention: false,

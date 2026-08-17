@@ -3,7 +3,7 @@
 **Status:** Phase 1 complete; Phase 2 core and a real clean-container smoke trial
 complete, with immutable packaging and smoke automation still pending
 
-**Reviewed:** 2026-08-14
+**Reviewed:** 2026-08-16
 
 **Initial transport:** LoopIQ CLI in one Harbor trial container
 
@@ -66,7 +66,7 @@ machine consumer of `loopiq run`; it is not a new Agent mode.
 | Area | Required resolution |
 | --- | --- |
 | JSONL terminal | The current terminal is stable enough for the Phase 2 supervisor, but it does not yet contain complete duration, model identity, reason taxonomy, aggregate Agent usage, or output-truncation state. |
-| Installation | The adapter checks out the supplied Git revision and builds it in the trial, but does not yet enforce a full commit SHA or use an immutable published package/image. |
+| Installation | The adapter checks out the supplied Git revision and builds it in the trial. Online system, source, and dependency installation retries classified transient network failures up to three attempts with bounded backoff, while repository build and version failures fail immediately. It does not yet enforce a full commit SHA or use an immutable published package/image. |
 | Secret-file permissions | The adapter uses temporary files and deletes them, but this repository does not explicitly enforce and test mode `0600` after Harbor uploads them. |
 | Chat experience | Banner, basic commands, Ctrl-C abort, and generic tool progress exist; explicit `/abort` and richer operation summaries remain. |
 | ATIF | The Harbor adapter strictly converts completed native LoopIQ JSONL into validated ATIF-v1.7 while retaining the native stream as evidence. |
@@ -207,6 +207,7 @@ integrations/harbor/
   loopiq.py
   supervisor.py
   trajectory.py
+  test_loopiq.py
   test_supervisor.py
   test_trajectory.py
 ```
@@ -238,6 +239,10 @@ compaction, event repair, or reward calculation.
   shallow checkout of that revision, builds the workspaces, and verifies the
   compiled CLI workspace entry directly. It does not assume npm creates a root
   `node_modules/.bin/loopiq` link for the private CLI workspace.
+- [x] Online system-package, NVM, Git, and npm dependency installation retries
+  classified transient network and TLS failures up to three attempts with
+  bounded backoff. The repository build and compiled CLI version check are a
+  separate non-retried phase so code failures remain visible.
 - [x] Setup uses Agent's normal `providers add` and `models list` operations.
 - [x] The supervisor starts a new process session and manages the entire process
   group rather than only the CLI PID.
@@ -287,9 +292,11 @@ env:
     {"baseUrl":"http://host.docker.internal:4000/v1","modelId":"gpt-5.6-sol","modelName":"GPT-5.6 SOL","contextWindow":1050000,"maxTokens":128000,"reasoning":true}
 ```
 
-The adapter materializes this object into the isolated trial's `agent.json`
-before adding the API-token credential. The configured model is used directly;
-neither the adapter nor Agent calls `/models` or applies a hard-coded whitelist.
+The adapter keeps the OS Home (`/tmp/loopiq-home`) distinct from Agent Home
+(`/tmp/loopiq-home/.loopiq`) and materializes this object into Agent Home's
+`agent.json` before adding the API-token credential. The configured model is
+used directly; neither the adapter nor Agent calls `/models` or applies a
+hard-coded whitelist. The adapter setup test exercises this real path contract.
 `localhost` would refer to the Harbor trial container itself. LiteLLM owns
 upstream authentication, while the Harbor trial stores only its isolated proxy
 credential. This path is local Docker only and is not expected to work from a
@@ -304,6 +311,12 @@ without an exception. The task reward was `0.0`, which is a task-solution
 result rather than an integration failure. A 300-second inner deadline was too
 short; the successful Run took 593,764 ms, so the example keeps explicit slack
 between the inner and outer deadlines.
+
+The 2026-08-16 post-migration local regression smoke used LoopIQ revision
+`32c34c5`, the same Harbor revision, model `custom-openai/gpt-5.6-sol`, and the
+same task. It validated the separate OS Home and Agent Home setup path, completed
+without an exception, produced one valid native terminal plus a 21-step
+ATIF-v1.7 trajectory, and received reward `1.0`.
 
 The ATIF converter was subsequently validated against the pinned Harbor
 revision with its fixed protocol fixture and the successful `eac817c` Trial

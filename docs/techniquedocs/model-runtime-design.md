@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last reviewed: 2026-08-14
+Last reviewed: 2026-08-16
 
 This document defines the implemented ownership and persistence boundaries between
 the Agent, LLM providers, credentials, Sessions, the Server, and the CLI. It is
@@ -24,17 +24,16 @@ kept as a decision record so the reasons behind each boundary remain explicit.
 - Keep the selected model for a Session durable and independent from the global
   default model.
 - Give CLI and Server the same provider, authentication, and model behavior.
-- Keep repository-specific `@loopiq/ai` changes exceptional and isolated; the
-  configurable OpenAI-compatible Provider occupies one standalone provider
-  module.
+- Keep `@loopiq/ai` read-only and place the configurable OpenAI-compatible
+  Provider in the Agent-owned model subsystem.
 - Remove the current duplicated credential stores and provider setup without
   retaining forwarding wrappers.
 
 ## Non-goals
 
 - This change does not redesign existing provider implementations in
-  `@loopiq/ai`; it adds one isolated configurable Chat Completions provider
-  module.
+  `@loopiq/ai`; the Agent composes its configurable Chat Completions Provider
+  from the dependency's public primitives.
 - This change does not introduce a general provider plugin format, multiple
   arbitrary Provider instances, custom authentication schemes, or arbitrary
   request headers.
@@ -177,19 +176,18 @@ authenticated, valid, selectable, or the default.
 the configured `baseUrl`. Its local catalog contains exactly the configured
 `modelId`; it does not query `/models`, intersect a generated catalog, or infer a
 whitelist from the model name. The optional display name, context window,
-maximum output, and reasoning flag are local metadata. Conservative request
-compatibility avoids non-standard `store`, developer-role, reasoning-effort,
-strict-schema, and streaming-usage extensions. Supporting a private extension
-requires an explicit future contract rather than endpoint-specific detection in
-`ModelRuntime`.
+maximum output, and reasoning flag are local metadata. Its request compatibility
+disables `store`, developer-role, strict-schema, and long-cache extensions while
+enabling reasoning-effort and streaming-usage fields expected by the configured
+endpoint.
 
 The supported-provider set is Agent application policy. Adding another
 built-in provider later changes this table and the Agent-owned registration
 list; it does not add provider assembly code to CLI or Server. Concrete
 provider factories come from `@loopiq/ai` provider subpaths. The
-`custom-openai` factory is kept in `providers/custom-openai.ts`; the Agent
-imports that module directly without adding a forwarding wrapper or coupling it
-to the generated global catalog.
+`custom-openai` factory lives beside this registry in `model/custom-openai.ts`
+and composes public `@loopiq/ai` Provider and Chat Completions primitives without
+coupling to the generated global catalog.
 
 ### D3. Public Agent construction has no persistence-location option
 
@@ -394,7 +392,8 @@ Ownership is:
 | Data | Owner | Persistence |
 | --- | --- | --- |
 | Supported Provider set and registration policy | `ModelRuntime` | Agent application code |
-| Concrete Provider factory implementations | `@loopiq/ai` | Provider modules |
+| Built-in Provider factory implementations | `@loopiq/ai` | Provider modules |
+| Configurable custom Provider factory | `ModelRuntime` | Agent model subsystem |
 | Optional global default model | Agent settings | `agent.json` |
 | Global default thinking level | Agent settings | `agent.json` |
 | Safe Provider request policy | Agent settings | `agent.json` |
@@ -973,9 +972,6 @@ include secrets or sensitive provider response headers.
 The implementation uses this ownership:
 
 ```text
-packages/ai/src/providers/
-  custom-openai.ts
-
 packages/agent/src/
   agent.ts
   create-agent.ts
@@ -987,6 +983,7 @@ packages/agent/src/
     model-runtime.ts
     provider-types.ts
     builtin-providers.ts
+    custom-openai.ts
     file-credential-store.ts
   session/
     agent-session-manager.ts
@@ -995,9 +992,8 @@ packages/agent/src/
     json-file.ts
 ```
 
-The custom OpenAI-compatible Provider implementation is isolated in the
-`@loopiq/ai` provider module. Agent application registration, dynamic
-catalog orchestration, and credential behavior belong under `model/`;
+The custom OpenAI-compatible Provider implementation, application registration,
+dynamic catalog orchestration, and credential behavior belong under `model/`.
 Agent-wide settings belong under `configuration/`; Session behavior belongs
 under `session/`. Shared persistence files are dependency-leaf primitives and
 import no business types. Platform usage does not justify a top-level technical
@@ -1027,8 +1023,9 @@ bucket.
 12. Run build, type checking, unit tests, CLI integration tests, Server tests,
     and a shared-Agent-Home cross-process credential test.
 13. Replace the local LiteLLM-specific catalog bridge with one standalone,
-    configuration-driven `@loopiq/ai` Chat Completions provider while retaining
-    Agent ownership of registration and local settings.
+    configuration-driven Agent Chat Completions Provider composed from public
+    `@loopiq/ai` primitives while retaining Agent ownership of registration and
+    local settings.
 
 Future changes to this behavior must update
 [`multi-session-runtime.md`](./multi-session-runtime.md),

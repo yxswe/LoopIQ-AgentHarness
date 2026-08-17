@@ -10,9 +10,8 @@ relevant section here in the same change.
 LoopIQ Agent is a TypeScript monorepo (npm workspaces, `packages/*`) that
 implements one Agent application with HTTP, CLI, and DevUI adapters:
 
-- `@loopiq/ai` — externally sourced model/provider core. Repository-specific
-  changes are normally prohibited; the configurable OpenAI-compatible
-  integration is an explicit exception isolated to one provider module.
+- `@loopiq/ai` — externally sourced, read-only model/provider core.
+  Repository-specific Provider composition lives in the Agent model subsystem.
 - Agent (`packages/agent`, private workspace `@loopiq/agent`) — the application
   composition root plus turn loop, Session persistence, tools, and events.
 - `@loopiq/server` (`packages/server`) — a Bun HTTP server (DevUI backend) that
@@ -54,11 +53,6 @@ Purpose: provider-agnostic LLM API with model discovery and streaming.
 - `src/api/` — per-provider API implementations (anthropic-messages,
   openai-responses, bedrock, google, mistral, azure, ...).
 - `src/providers/` — provider configs across many clouds.
-- `src/providers/custom-openai.ts` — isolated configurable Chat Completions
-  provider. It creates exactly the endpoint and model supplied by Agent
-  configuration, uses conservative compatibility flags, and performs no remote
-  catalog discovery. It is exported through the existing provider subpath
-  pattern and is not added to the generated global catalog.
 - `src/auth/` — credential store and OAuth flows.
 - `src/utils/` — event streams, JSON parsing, retry, validation, diagnostics.
 - Generated catalogs: `models.generated.ts`, `image-models.generated.ts`.
@@ -116,8 +110,10 @@ and runtime model switching are documented in
   GitHub Copilot, OpenAI Codex, OpenAI, Anthropic, Google, OpenRouter, DeepSeek,
   Moonshot AI CN, MiniMax CN, Z.AI Coding CN, and Kimi For Coding, plus a
   `custom-openai` registration only when local Agent configuration defines it.
-  The custom factory is imported directly from the isolated
-  `@loopiq/ai/providers/custom-openai` module.
+- `model/custom-openai.ts` — Agent-owned configurable Chat Completions Provider
+  composed from public `@loopiq/ai` primitives. It creates exactly the endpoint
+  and model supplied by Agent configuration and performs no remote catalog
+  discovery.
 - `model/provider-types.ts` — serializable Agent-facing provider, model, and
   credential-interaction contracts. Adapter APIs never expose `@loopiq/ai`
   runtime objects.
@@ -345,10 +341,12 @@ The implemented contract and remaining long-run limitations are documented in
 ## Integration: Harbor Local Evaluation
 
 `integrations/harbor/loopiq.py` is a Harbor installed-agent import-path adapter.
-It installs one pinned LoopIQ revision, creates an isolated trial Agent Home,
-bootstraps an API-token credential through `loopiq providers add --token-stdin`,
-and invokes one fresh `loopiq run` per trial. Harbor types stay outside the
-TypeScript packages.
+It installs one pinned LoopIQ revision, retries only classified transient
+network failures during online installation with bounded backoff, creates an
+isolated trial Agent Home, bootstraps an API-token credential through
+`loopiq providers add --token-stdin`, and invokes one fresh `loopiq run` per
+trial. Repository build and version failures are not retried. Harbor types stay
+outside the TypeScript packages.
 
 `integrations/harbor/supervisor.py` owns the evaluation process boundary. It
 redirects stdout/stderr directly to Harbor log files, applies an inner deadline

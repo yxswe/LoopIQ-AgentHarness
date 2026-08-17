@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shlex
+from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, override
 
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
+    NetworkConnectionError,
+    NonZeroAgentExitCodeError,
     with_prompt_template,
 )
 from harbor.agents.installed.node_install import nvm_node_install_snippet
@@ -28,8 +32,25 @@ class LoopIQ(BaseInstalledAgent):
 
     SUPPORTS_ATIF = True
     SUPPORTS_RESUME = False
-    ADAPTER_VERSION = "0.3.0"
+    ADAPTER_VERSION = "0.3.1"
     HARBOR_COMPATIBILITY_REVISION = "cc4b7be7c1ace2621b38c4e2e13ef736a9bc884f"
+    _INSTALL_NETWORK_ATTEMPTS = 3
+    _INSTALL_RETRY_DELAY_SEC = 2
+    _TRANSIENT_INSTALL_ERROR_MARKERS = (
+        "eai_again",
+        "econnrefused",
+        "econnreset",
+        "eintegrity",
+        "enetunreach",
+        "etimedout",
+        "failed to fetch",
+        "fetch failed",
+        "npm error code err_ssl_",
+        "socket hang up",
+        "ssl routines:",
+        "tls handshake timeout",
+        "unable to connect to",
+    )
 
     CLI_FLAGS: ClassVar[list[CliFlag]] = [
         CliFlag(
@@ -43,7 +64,8 @@ class LoopIQ(BaseInstalledAgent):
 
     _INSTALL_DIR = PurePosixPath("/installed-agent/loopiq")
     _CLI_PATH = _INSTALL_DIR / "packages/cli/dist/cli.js"
-    _AGENT_HOME = PurePosixPath("/tmp/loopiq-home")
+    _OS_HOME = PurePosixPath("/tmp/loopiq-home")
+    _AGENT_HOME = _OS_HOME / ".loopiq"
     _INSTRUCTION_PATH = PurePosixPath("/tmp/loopiq-instruction.txt")
     _TOKEN_PATH = PurePosixPath("/tmp/loopiq-api-token.txt")
     _SUPERVISOR_PATH = PurePosixPath("/installed-agent/loopiq-supervisor.py")
@@ -84,27 +106,67 @@ class LoopIQ(BaseInstalledAgent):
     def parse_version(self, stdout: str) -> str:
         return str(json.loads(stdout)["version"])
 
+    async def _retry_install_network(
+        self,
+        step: str,
+        operation: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        for attempt in range(1, self._INSTALL_NETWORK_ATTEMPTS + 1):
+            try:
+                return await operation()
+            except NonZeroAgentExitCodeError as error:
+                message = str(error).lower()
+                is_transient = isinstance(error, NetworkConnectionError) or any(
+                    marker in message
+                    for marker in self._TRANSIENT_INSTALL_ERROR_MARKERS
+                )
+                if not is_transient or attempt == self._INSTALL_NETWORK_ATTEMPTS:
+                    raise
+                delay_sec = self._INSTALL_RETRY_DELAY_SEC * attempt
+                self.logger.warning(
+                    "Transient network failure during %s; retrying in %s seconds "
+                    "(attempt %s/%s)",
+                    step,
+                    delay_sec,
+                    attempt + 1,
+                    self._INSTALL_NETWORK_ATTEMPTS,
+                )
+                await asyncio.sleep(delay_sec)
+        raise AssertionError("install retry loop exhausted without returning")
+
     @override
     async def install(self, environment: BaseEnvironment) -> None:
-        await self.ensure_system_dependencies(
-            environment,
-            ("curl", "bash", "git", "ca_certificates", "python3", "procps"),
+        await self._retry_install_network(
+            "system dependency installation",
+            lambda: self.ensure_system_dependencies(
+                environment,
+                ("curl", "bash", "git", "ca_certificates", "python3", "procps"),
+            ),
         )
         install_dir = shlex.quote(self._INSTALL_DIR.as_posix())
         cli_path = shlex.quote(self._CLI_PATH.as_posix())
         repository = shlex.quote(self._repository_url)
         revision = shlex.quote(self._version)
+        bootstrap_command = (
+            "set -euo pipefail; "
+            f"{nvm_node_install_snippet()} && "
+            f"rm -rf {install_dir} && mkdir -p {install_dir} && "
+            f"git -C {install_dir} init && "
+            f"git -C {install_dir} remote add origin {repository} && "
+            f"git -C {install_dir} fetch --depth 1 origin {revision} && "
+            f"git -C {install_dir} checkout --detach FETCH_HEAD && "
+            f"cd {install_dir} && npm ci"
+        )
+        await self._retry_install_network(
+            "LoopIQ source and dependency installation",
+            lambda: self.exec_as_agent(environment, command=bootstrap_command),
+        )
         await self.exec_as_agent(
             environment,
             command=(
-                "set -euo pipefail; "
-                f"{nvm_node_install_snippet()} && "
-                f"rm -rf {install_dir} && mkdir -p {install_dir} && "
-                f"git -C {install_dir} init && "
-                f"git -C {install_dir} remote add origin {repository} && "
-                f"git -C {install_dir} fetch --depth 1 origin {revision} && "
-                f"git -C {install_dir} checkout --detach FETCH_HEAD && "
-                f"cd {install_dir} && npm ci && npm run build && "
+                'set -euo pipefail; export NVM_DIR="$HOME/.nvm"; '
+                '. "$NVM_DIR/nvm.sh"; '
+                f"cd {install_dir} && npm run build && "
                 f"chmod 755 {cli_path} && {cli_path} --version"
             ),
         )
@@ -189,16 +251,17 @@ class LoopIQ(BaseInstalledAgent):
             filename="loopiq-api-token.txt",
         )
         env = {
-            "HOME": self._AGENT_HOME.as_posix(),
+            "HOME": self._OS_HOME.as_posix(),
             "LOOPIQ_BUILD_REVISION": self._version,
         }
         try:
             await self.exec_as_agent(
                 environment,
                 command=(
-                    f"rm -rf {shlex.quote(self._AGENT_HOME.as_posix())} && "
+                    f"rm -rf {shlex.quote(self._OS_HOME.as_posix())} && "
                     f"mkdir -p {shlex.quote(self._AGENT_HOME.as_posix())} && "
-                    f"chmod 700 {shlex.quote(self._AGENT_HOME.as_posix())}"
+                    f"chmod 700 {shlex.quote(self._OS_HOME.as_posix())} "
+                    f"{shlex.quote(self._AGENT_HOME.as_posix())}"
                 ),
                 env=env,
             )
@@ -270,7 +333,7 @@ class LoopIQ(BaseInstalledAgent):
         if cli_flags:
             command.extend(cli_flags.split())
         env = {
-            "HOME": self._AGENT_HOME.as_posix(),
+            "HOME": self._OS_HOME.as_posix(),
             "LOOPIQ_BUILD_REVISION": self._version,
         }
         supervisor_command = " ".join(

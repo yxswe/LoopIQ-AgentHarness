@@ -1,6 +1,5 @@
 import type { Provider } from "@loopiq/ai";
 import { anthropicProvider } from "@loopiq/ai/providers/anthropic";
-import { CUSTOM_OPENAI_PROVIDER_ID, createCustomOpenAIProvider } from "@loopiq/ai/providers/custom-openai";
 import { deepseekProvider } from "@loopiq/ai/providers/deepseek";
 import { githubCopilotProvider } from "@loopiq/ai/providers/github-copilot";
 import { googleProvider } from "@loopiq/ai/providers/google";
@@ -12,6 +11,7 @@ import { openaiCodexProvider } from "@loopiq/ai/providers/openai-codex";
 import { openrouterProvider } from "@loopiq/ai/providers/openrouter";
 import { zaiCodingCnProvider } from "@loopiq/ai/providers/zai-coding-cn";
 import type { CustomProviderConfiguration } from "../configuration/agent-configuration.ts";
+import { CUSTOM_OPENAI_PROVIDER_ID, createCustomOpenAIProvider } from "./custom-openai.ts";
 import type { ProviderAuthMethod } from "./provider-types.ts";
 
 export interface BuiltinProviderRegistration {
