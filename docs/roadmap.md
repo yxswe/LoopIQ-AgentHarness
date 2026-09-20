@@ -328,36 +328,87 @@ persistence failure, and explicitly dynamic request-state behavior.
 
 ## 4. CLI & headless entrypoint
 
-**Status**: the Phase 0 command boundary is implemented. `loopiq run` supports
-argument/stdin input, fresh or explicitly resumed Sessions, model/thinking
-selection for new Sessions, text/JSON/versioned JSONL output, explicit exit
-codes, and executable end-to-end tests. `chat` supports sequential interaction
-and basic Session/model/thinking commands. The Harbor import-path adapter and
-process-group supervisor are implemented under `integrations/harbor`.
+**Status**: the CLI command boundary, Harbor adapter/supervisor, and ATIF-v1.7
+conversion are implemented. A real clean-container Harbor smoke trial has
+completed. In the Harbor plan, Phase 1 and Phase 4 are complete; Phase 2 still
+needs packaging, uploaded-file permissions, and automated smoke coverage;
+Phase 3 reliability work has not started.
 
-Remaining work belongs to the runtime-hardening and event-delivery items below:
-Agent-owned deadlines/budgets, complete usage including compaction, bounded
-output/backpressure and EPIPE handling, background-process ownership,
-time-bounded signal escalation, immutable distribution artifacts, and full
-Harbor container fixtures. See
-[`features/cli-headless-readiness.md`](./features/cli-headless-readiness.md) and
-[`features/harbor-local-evaluation.md`](./features/harbor-local-evaluation.md).
+The checklist below indexes the remaining branch work. The detailed acceptance
+criteria and authoritative completion state remain in
+[`features/harbor-local-evaluation.md`](./features/harbor-local-evaluation.md);
+current CLI behavior and limitations are documented in
+[`features/cli-headless-readiness.md`](./features/cli-headless-readiness.md).
+Update this index and the feature checklist together as work completes.
 
 **Why**: The Agent needs consistent behavior across DevUI and headless use, with
 reliable scripting, automation, and CI behavior.
 
-**Scope**:
-- Extend the CLI/headless entrypoint so it constructs the Agent, accepts a
-  prompt (arg/stdin), streams
-  output, and exits deterministically.
-- Support one-shot and interactive modes, session selection/resume, model and
-  thinking-level flags, and machine-readable output (JSON/JSONL) for piping.
+### Phase 2: Finish reproducible Harbor setup
 
-**Observability**: structured (JSONL) event output mode so external tools can
-consume the same event stream the DevUI sees; clear exit codes for failures.
+- [ ] Require a full immutable LoopIQ commit SHA during source installation;
+  then replace checkout/build with a pinned immutable package or image. Record
+  its digest together with Node, task, verifier, and model identity.
+- [ ] Explicitly set and test mode `0600` on uploaded token and prompt files
+  inside the trial environment.
+- [ ] Automate the clean-container Harbor smoke through installation,
+  credential setup, execution, native-terminal and ATIF validation, artifact
+  collection, verifier execution, and environment teardown. Local supervisor
+  tests and a historical manual smoke do not satisfy this item.
 
-**Tests**: end-to-end CLI tests (spawn process, feed prompt, assert output and
-exit code), plus tests for flag parsing and headless session lifecycle.
+### Phase 3: Bound execution and process lifetime
+
+- [ ] Add Agent-owned total Run deadlines and maximum Provider-call, tool-call,
+  and internal Turn counts.
+- [ ] Add Agent-owned total output-byte limits and token/cost stop thresholds,
+  with documented bounded overshoot after Provider usage arrives.
+- [ ] Register background processes with their owning Session/Agent and define
+  cancellation, process-tree termination, and shutdown cleanup. This is the
+  evaluation prerequisite from item 1's background task management work.
+- [ ] Add a bounded CLI graceful-shutdown deadline and repeated-signal behavior,
+  including signals received during stdin input and Agent construction. Keep
+  Agent deadline < CLI shutdown deadline < supervisor timeout < Harbor timeout.
+- [ ] Expose only Run-policy inputs that Agent actually enforces through CLI.
+
+### Phase 3: Complete terminal, accounting, and output contracts
+
+- [ ] Add selected Provider/model identity and Run duration to `run_completed`.
+- [ ] Define Agent-owned terminal reasons covering at least `natural`,
+  `provider_error`, `length`, `deadline`, and `budget`; reconcile Agent and CLI
+  handling of Provider length termination.
+- [ ] Move aggregate usage/cost into Agent, including compaction inference, and
+  preserve `known | partial | unknown` accounting through all adapters. Implement
+  this with item 10 rather than maintaining independent CLI totals.
+- [ ] Add explicit output/artifact limits and truncation state to the terminal.
+- [ ] Handle stdout backpressure and EPIPE deterministically, with bounded event
+  delivery that prevents a slow or failed consumer from blocking or failing
+  Agent execution. Coordinate subscriber behavior with item 10.
+- [ ] Bound retained tool progress, Run-result messages, and Session-open memory
+  for large outputs and histories.
+- [ ] Enforce total Harbor artifact-size limits and redaction policies.
+
+### Personal Chat follow-up
+
+- [ ] Add an explicit `/abort` command alongside Ctrl-C.
+- [ ] Render concise operation-specific progress such as `Thinking...`,
+  `Running Bash: npm test`, and `Editing src/app.ts`, without exposing sensitive
+  tool arguments.
+- [ ] Define input during an active Chat Run as Agent steering while keeping
+  machine `run` non-interactive.
+
+### Remaining verification
+
+- [ ] Add deterministic CLI success fixtures at the Provider boundary and real
+  process tests for signal timing, repeated signals, backpressure/EPIPE, and
+  high-output memory bounds.
+- [ ] Add clean-machine packaging tests and container-level Harbor fixtures for
+  success, Provider failure, tool failure, length termination, timeout, abort,
+  large output, hard kill, and full teardown. Verify exit codes, terminal
+  cardinality or absence after hard kill, artifacts, and process cleanup.
+
+**Observability**: expose effective limits, terminal reasons, complete or partial
+usage, truncation state, shutdown escalation, and cleanup results without
+duplicating sensitive content in diagnostics.
 
 ## 5. Kernel test coverage
 
@@ -511,8 +562,9 @@ inconsistent accounting, and coupling Run execution to live callbacks makes
 event delivery timing part of core execution correctness.
 
 **Scope**:
-- Aggregate provider-reported usage and cost across every assistant inference
-  produced by one Run, including tool continuations and interrupted steering.
+- Aggregate provider-reported usage and cost across every inference produced by
+  one Run, including tool continuations, interrupted steering, and context
+  compaction.
   Preserve per-inference usage on assistant messages, expose the aggregate on
   `RunResult` and `run_settled`, and define unknown/partial usage semantics
   without double-counting reasoning tokens that are already included in output.
