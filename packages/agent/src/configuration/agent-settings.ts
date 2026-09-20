@@ -22,9 +22,9 @@ export class AgentSettings {
 		return structuredClone(this.configuration);
 	}
 
-	getSessionDefaults(): { model: ModelReference; thinkingLevel: ThinkingLevel } {
+	getSessionDefaults(): { model?: ModelReference; thinkingLevel: ThinkingLevel } {
 		return {
-			model: structuredClone(this.configuration.defaultModel),
+			...(this.configuration.defaultModel ? { model: structuredClone(this.configuration.defaultModel) } : {}),
 			thinkingLevel: this.configuration.defaultThinkingLevel,
 		};
 	}
@@ -44,10 +44,14 @@ export class AgentSettings {
 				`Invalid default thinking level ${update.defaultThinkingLevel}`,
 			);
 		}
+		const defaultModel = update.defaultModel ?? this.configuration.defaultModel;
 		const nextConfiguration: AgentConfiguration = {
-			defaultModel: structuredClone(update.defaultModel ?? this.configuration.defaultModel),
+			...(defaultModel ? { defaultModel: structuredClone(defaultModel) } : {}),
 			defaultThinkingLevel: update.defaultThinkingLevel ?? this.configuration.defaultThinkingLevel,
 			providerRequest: this.mergeProviderRequestPolicy(update.providerRequest),
+			...(this.configuration.customProvider
+				? { customProvider: structuredClone(this.configuration.customProvider) }
+				: {}),
 		};
 		this.configuration = await this.store.update(nextConfiguration);
 		return this.getSnapshot();

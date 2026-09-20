@@ -328,21 +328,87 @@ persistence failure, and explicitly dynamic request-state behavior.
 
 ## 4. CLI & headless entrypoint
 
+**Status**: the CLI command boundary, Harbor adapter/supervisor, and ATIF-v1.7
+conversion are implemented. A real clean-container Harbor smoke trial has
+completed. In the Harbor plan, Phase 1 and Phase 4 are complete; Phase 2 still
+needs packaging, uploaded-file permissions, and automated smoke coverage;
+Phase 3 reliability work has not started.
+
+The checklist below indexes the remaining branch work. The detailed acceptance
+criteria and authoritative completion state remain in
+[`features/harbor-local-evaluation.md`](./features/harbor-local-evaluation.md);
+current CLI behavior and limitations are documented in
+[`features/cli-headless-readiness.md`](./features/cli-headless-readiness.md).
+Update this index and the feature checklist together as work completes.
+
 **Why**: The Agent needs consistent behavior across DevUI and headless use, with
 reliable scripting, automation, and CI behavior.
 
-**Scope**:
-- Extend the CLI/headless entrypoint so it constructs the Agent, accepts a
-  prompt (arg/stdin), streams
-  output, and exits deterministically.
-- Support one-shot and interactive modes, session selection/resume, model and
-  thinking-level flags, and machine-readable output (JSON/JSONL) for piping.
+### Phase 2: Finish reproducible Harbor setup
 
-**Observability**: structured (JSONL) event output mode so external tools can
-consume the same event stream the DevUI sees; clear exit codes for failures.
+- [ ] Require a full immutable LoopIQ commit SHA during source installation;
+  then replace checkout/build with a pinned immutable package or image. Record
+  its digest together with Node, task, verifier, and model identity.
+- [ ] Explicitly set and test mode `0600` on uploaded token and prompt files
+  inside the trial environment.
+- [ ] Automate the clean-container Harbor smoke through installation,
+  credential setup, execution, native-terminal and ATIF validation, artifact
+  collection, verifier execution, and environment teardown. Local supervisor
+  tests and a historical manual smoke do not satisfy this item.
 
-**Tests**: end-to-end CLI tests (spawn process, feed prompt, assert output and
-exit code), plus tests for flag parsing and headless session lifecycle.
+### Phase 3: Bound execution and process lifetime
+
+- [ ] Add Agent-owned total Run deadlines and maximum Provider-call, tool-call,
+  and internal Turn counts.
+- [ ] Add Agent-owned total output-byte limits and token/cost stop thresholds,
+  with documented bounded overshoot after Provider usage arrives.
+- [ ] Register background processes with their owning Session/Agent and define
+  cancellation, process-tree termination, and shutdown cleanup. This is the
+  evaluation prerequisite from item 1's background task management work.
+- [ ] Add a bounded CLI graceful-shutdown deadline and repeated-signal behavior,
+  including signals received during stdin input and Agent construction. Keep
+  Agent deadline < CLI shutdown deadline < supervisor timeout < Harbor timeout.
+- [ ] Expose only Run-policy inputs that Agent actually enforces through CLI.
+
+### Phase 3: Complete terminal, accounting, and output contracts
+
+- [ ] Add selected Provider/model identity and Run duration to `run_completed`.
+- [ ] Define Agent-owned terminal reasons covering at least `natural`,
+  `provider_error`, `length`, `deadline`, and `budget`; reconcile Agent and CLI
+  handling of Provider length termination.
+- [ ] Move aggregate usage/cost into Agent, including compaction inference, and
+  preserve `known | partial | unknown` accounting through all adapters. Implement
+  this with item 10 rather than maintaining independent CLI totals.
+- [ ] Add explicit output/artifact limits and truncation state to the terminal.
+- [ ] Handle stdout backpressure and EPIPE deterministically, with bounded event
+  delivery that prevents a slow or failed consumer from blocking or failing
+  Agent execution. Coordinate subscriber behavior with item 10.
+- [ ] Bound retained tool progress, Run-result messages, and Session-open memory
+  for large outputs and histories.
+- [ ] Enforce total Harbor artifact-size limits and redaction policies.
+
+### Personal Chat follow-up
+
+- [ ] Add an explicit `/abort` command alongside Ctrl-C.
+- [ ] Render concise operation-specific progress such as `Thinking...`,
+  `Running Bash: npm test`, and `Editing src/app.ts`, without exposing sensitive
+  tool arguments.
+- [ ] Define input during an active Chat Run as Agent steering while keeping
+  machine `run` non-interactive.
+
+### Remaining verification
+
+- [ ] Add deterministic CLI success fixtures at the Provider boundary and real
+  process tests for signal timing, repeated signals, backpressure/EPIPE, and
+  high-output memory bounds.
+- [ ] Add clean-machine packaging tests and container-level Harbor fixtures for
+  success, Provider failure, tool failure, length termination, timeout, abort,
+  large output, hard kill, and full teardown. Verify exit codes, terminal
+  cardinality or absence after hard kill, artifacts, and process cleanup.
+
+**Observability**: expose effective limits, terminal reasons, complete or partial
+usage, truncation state, shutdown escalation, and cleanup results without
+duplicating sensitive content in diagnostics.
 
 ## 5. Kernel test coverage
 
@@ -496,8 +562,9 @@ inconsistent accounting, and coupling Run execution to live callbacks makes
 event delivery timing part of core execution correctness.
 
 **Scope**:
-- Aggregate provider-reported usage and cost across every assistant inference
-  produced by one Run, including tool continuations and interrupted steering.
+- Aggregate provider-reported usage and cost across every inference produced by
+  one Run, including tool continuations, interrupted steering, and context
+  compaction.
   Preserve per-inference usage on assistant messages, expose the aggregate on
   `RunResult` and `run_settled`, and define unknown/partial usage semantics
   without double-counting reasoning tokens that are already included in output.
@@ -533,3 +600,55 @@ aborted, and failed Runs; cover subscribe-before-run, subscribe-after-start,
 reconnect/cursor gaps, slow and failing subscribers, per-subscriber ordering,
 bounded overflow, unsubscribe, terminal delivery, and equivalent CLI
 JSONL/Server SSE/DevUI behavior.
+
+## 11. Reproducible `@loopiq/ai` upstream synchronization
+
+**Current baseline**: `packages/ai` is a read-only vendored copy of
+`earendil-works/pi/packages/ai`, currently identified as `@loopiq/ai` version
+`0.80.3`. Normal Agent development must not edit it. The local model catalogs,
+including `providers/*.models.ts` and `models.generated.ts`, determine which
+remotely advertised models the Agent recognizes. A model available to an
+account is therefore still hidden by the Agent until the vendored catalog knows
+that model ID.
+
+**Why**: Provider APIs, OAuth behavior, SDK dependencies, model IDs, context
+limits, capabilities, and generated catalogs change upstream. Ad hoc file
+copying would make the dependency origin and local model list impossible to
+audit or reproduce.
+
+**Scope**:
+- Define one explicitly authorized synchronization workflow from a pinned
+  upstream `earendil-works/pi` commit or release. Record the upstream revision,
+  upstream package version, import date, and any unavoidable LoopIQ packaging
+  overlay in one machine-readable manifest.
+- Keep `packages/ai` read-only during normal feature work. Synchronization must
+  replace it from the pinned upstream source through the documented import
+  workflow; do not hand-edit Provider, OAuth, SDK, or generated-model files in
+  this repository.
+- Decide whether the long-term delivery form remains a vendored subtree or
+  becomes a pinned external package/submodule. Preserve the same reviewable
+  provenance and deterministic lockfile in either form.
+- Run the upstream model-generation process as part of synchronization and
+  include generated model catalogs in the reviewed update. Document which
+  upstream data source generates model IDs, names, context windows, output
+  limits, reasoning flags, and text/image capabilities.
+- Review every update for changes to exports, credential shapes, OAuth refresh,
+  Provider IDs, model schemas, streaming events, request options, and error
+  behavior consumed by Agent. Adapt only the consuming packages when possible.
+- Define a deliberate update cadence and an on-demand path for newly released
+  models. Do not automatically merge unreviewed upstream or generated changes.
+- Make account-aware discovery diagnostics distinguish remote model IDs that
+  are unavailable locally because the vendored catalog is stale, without
+  exposing credentials or authorization responses.
+
+**Observability**: expose the pinned upstream revision and `@loopiq/ai` version
+in build/version diagnostics. Model discovery may report matched and unmatched
+ID counts and a catalog revision, but must not log credentials, authorization
+headers, or complete Provider responses.
+
+**Tests**: verify a clean upstream import is reproducible; generated catalogs
+are clean after regeneration; AI, Agent, CLI, and Server build and test suites
+pass; supported Provider registrations still resolve; credential refresh and
+streaming contracts remain compatible; and fixture-based model discovery proves
+that newly added, removed, remote-only, and locally unknown model IDs are
+handled deterministically.

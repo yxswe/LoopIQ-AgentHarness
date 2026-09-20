@@ -8,6 +8,7 @@
 		"build": "npm run build -w @loopiq/ai && npm run build -w @loopiq/agent && npm run build -w @loopiq/cli",
 		"test": "npm run test --workspaces --if-present",
 		"check": "biome check --write .",
+		"cli": "loopiq",
 		"devui": "npm run server -w @loopiq/server"
 	},
 	"devDependencies": {

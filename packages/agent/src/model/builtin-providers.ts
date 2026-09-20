@@ -10,6 +10,8 @@ import { openaiProvider } from "@loopiq/ai/providers/openai";
 import { openaiCodexProvider } from "@loopiq/ai/providers/openai-codex";
 import { openrouterProvider } from "@loopiq/ai/providers/openrouter";
 import { zaiCodingCnProvider } from "@loopiq/ai/providers/zai-coding-cn";
+import type { CustomProviderConfiguration } from "../configuration/agent-configuration.ts";
+import { CUSTOM_OPENAI_PROVIDER_ID, createCustomOpenAIProvider } from "./custom-openai.ts";
 import type { ProviderAuthMethod } from "./provider-types.ts";
 
 export interface BuiltinProviderRegistration {
@@ -31,3 +33,18 @@ export const BUILTIN_PROVIDER_REGISTRATIONS: readonly BuiltinProviderRegistratio
 	{ id: "zai-coding-cn", authMethods: ["api_token"], create: zaiCodingCnProvider },
 	{ id: "kimi-coding", authMethods: ["api_token"], create: kimiCodingProvider },
 ];
+
+export function createBuiltinProviderRegistrations(
+	customProvider?: CustomProviderConfiguration,
+): readonly BuiltinProviderRegistration[] {
+	if (!customProvider) return BUILTIN_PROVIDER_REGISTRATIONS;
+	return [
+		BUILTIN_PROVIDER_REGISTRATIONS[0]!,
+		{
+			id: CUSTOM_OPENAI_PROVIDER_ID,
+			authMethods: ["api_token"],
+			create: () => createCustomOpenAIProvider(customProvider),
+		},
+		...BUILTIN_PROVIDER_REGISTRATIONS.slice(1),
+	];
+}

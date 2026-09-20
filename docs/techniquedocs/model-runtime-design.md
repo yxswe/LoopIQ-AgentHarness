@@ -2,7 +2,7 @@
 
 Status: Implemented behavior
 
-Last reviewed: 2026-07-28
+Last reviewed: 2026-08-16
 
 This document defines the implemented ownership and persistence boundaries between
 the Agent, LLM providers, credentials, Sessions, the Server, and the CLI. It is
@@ -15,23 +15,28 @@ kept as a decision record so the reasons behind each boundary remain explicit.
   adapters.
 - Create an Agent without requiring login, network access, or terminal input.
 - Reuse persisted credentials across Agent process lifetimes.
-- Register the agreed provider set on every Agent launch, independently of
-  whether credentials have been supplied.
+- Register the agreed built-in provider set on every Agent launch, independently
+  of whether credentials have been supplied, and conditionally add one locally
+  configured OpenAI-compatible Provider.
 - Permit runtime credential addition, replacement, validation, and removal.
 - Permit a Session to switch only to a provider whose persisted credential has
   been verified as usable.
 - Keep the selected model for a Session durable and independent from the global
   default model.
 - Give CLI and Server the same provider, authentication, and model behavior.
-- Preserve `@loopiq/ai` as an externally sourced, read-only dependency.
+- Keep `@loopiq/ai` read-only and place the configurable OpenAI-compatible
+  Provider in the Agent-owned model subsystem.
 - Remove the current duplicated credential stores and provider setup without
   retaining forwarding wrappers.
 
 ## Non-goals
 
-- This change does not redesign the provider implementations in `@loopiq/ai`.
-- This change does not introduce user-defined providers or a general provider
-  plugin format.
+- This change does not redesign existing provider implementations in
+  `@loopiq/ai`; the Agent composes its configurable Chat Completions Provider
+  from the dependency's public primitives.
+- This change does not introduce a general provider plugin format, multiple
+  arbitrary Provider instances, custom authentication schemes, or arbitrary
+  request headers.
 - This change does not register every provider exported by `@loopiq/ai`; it
   registers the explicit application-supported set below.
 - This change does not put credentials in Session JSONL.
@@ -86,7 +91,7 @@ ModelRuntime  AgentSettings  AgentSessionManager
 - models
       |
       v
-  @loopiq/ai (read-only dependency)
+  @loopiq/ai (provider implementations)
 ```
 
 There is one Agent facade per application process. `createAgent()` constructs
@@ -140,8 +145,8 @@ delegates model/provider commands to it. `ModelRuntime` owns:
 `ModelRuntime` does not own Session state, prompts, tools, message history, or
 adapter interaction policy.
 
-Every Agent instance registers the following provider implementations during
-local startup, whether or not a credential exists:
+Every Agent instance registers the following built-in provider implementations
+during local startup, whether or not a credential exists:
 
 | Provider ID | Supported credential methods |
 | --- | --- |
@@ -157,13 +162,32 @@ local startup, whether or not a credential exists:
 | `zai-coding-cn` | API token |
 | `kimi-coding` | API token |
 
+When `agent.json` contains `customProvider`, startup additionally registers:
+
+| Provider ID | Supported credential methods |
+| --- | --- |
+| `custom-openai` | API token |
+
 Registration means the Agent knows the provider implementation, authentication
 methods, and model catalog. It does not mean that the provider is configured,
 authenticated, valid, selectable, or the default.
 
+`custom-openai` sends standard bearer-token OpenAI Chat Completions requests to
+the configured `baseUrl`. Its local catalog contains exactly the configured
+`modelId`; it does not query `/models`, intersect a generated catalog, or infer a
+whitelist from the model name. The optional display name, context window,
+maximum output, and reasoning flag are local metadata. Its request compatibility
+disables `store`, developer-role, strict-schema, and long-cache extensions while
+enabling reasoning-effort and streaming-usage fields expected by the configured
+endpoint.
+
 The supported-provider set is Agent application policy. Adding another
 built-in provider later changes this table and the Agent-owned registration
-list; it does not add provider assembly code to CLI or Server.
+list; it does not add provider assembly code to CLI or Server. Concrete
+provider factories come from `@loopiq/ai` provider subpaths. The
+`custom-openai` factory lives beside this registry in `model/custom-openai.ts`
+and composes public `@loopiq/ai` Provider and Chat Completions primitives without
+coupling to the generated global catalog.
 
 ### D3. Public Agent construction has no persistence-location option
 
@@ -197,7 +221,6 @@ createAgent()
   -> construct the credential store
   -> construct Models
   -> register built-in providers
-  -> validate the locally known default model
   -> construct AgentSettings, AgentEngine, and AgentSessionManager
   -> return thin Agent facade
 ```
@@ -270,13 +293,24 @@ before the existing durable credential is replaced, so an invalid replacement
 cannot destroy a working credential. Cancellation spans both provider login and
 the validation request; an aborted candidate is never persisted.
 
+GitHub Copilot OAuth is adapted to the public `github.com` device flow: the
+Agent answers the dependency's optional Enterprise-domain prompt with an empty
+value, so adapters immediately receive the device-code event. On the first
+login, the returned account `availableModelIds` are intersected with the local
+catalog and exposed as a `select` prompt. The selected local model is used for
+the minimal credential-validation request. An empty intersection or a response
+outside the offered set fails without persisting the candidate. Replacing an
+existing GitHub Copilot credential uses the first available local model for
+validation and does not repeat the selection. This selection is validation
+input only and does not change the Agent default model.
+
 ### D6. No automatic interactive login
 
 The Agent never turns a normal command into an interactive login. This keeps
 headless and server behavior deterministic.
 
-- `sessions list`, `sessions create`, Session inspection, and deletion work
-  without authentication.
+- Session listing, inspection, deletion, and creation through `run` or `chat`
+  work without authentication.
 - An explicit login/token command or Server endpoint calls
   `addProviderCredential()`.
 - A model run without usable authentication reports the request-time Provider
@@ -326,7 +360,8 @@ Verification is an authenticated online operation. Local parsing or successful
 `Models.getAuth()` resolution alone cannot prove that a remote provider accepts
 the credential. Each registered provider therefore has an Agent-owned
 validation strategy, such as a provider-native authenticated status/catalog
-request or a minimal validation request against a designated model.
+request or a minimal validation request against a designated model. The latter
+permits up to 16 output tokens, remaining small across compatible endpoints.
 
 Validation results are time-bound and include `validatedAt`. They may be cached
 in memory for a short TTL, but each cache entry is bound to the exact persisted
@@ -356,10 +391,13 @@ Ownership is:
 
 | Data | Owner | Persistence |
 | --- | --- | --- |
-| Supported provider implementations | `ModelRuntime` | Application code |
-| Global default model | Agent settings | `agent.json` |
+| Supported Provider set and registration policy | `ModelRuntime` | Agent application code |
+| Built-in Provider factory implementations | `@loopiq/ai` | Provider modules |
+| Configurable custom Provider factory | `ModelRuntime` | Agent model subsystem |
+| Optional global default model | Agent settings | `agent.json` |
 | Global default thinking level | Agent settings | `agent.json` |
 | Safe Provider request policy | Agent settings | `agent.json` |
+| Optional custom endpoint and model metadata | Agent settings | `agent.json` |
 | Provider credentials | Credential store | `credentials.json` |
 | Credential validation result | `ModelRuntime` | Memory only |
 | Session Workspace path | `AgentSessionManager` | `session.jsonl` header |
@@ -368,13 +406,14 @@ Ownership is:
 | Dynamic provider/model objects | `ModelRuntime` | Memory only |
 | Login prompts and pending responses | Adapter | Memory only |
 
-`agent.json` contains one current shape with no version suffix:
+`agent.json` contains one current shape with no version suffix. The
+`defaultModel` member appears only after it is configured:
 
 ```json
 {
   "defaultModel": {
-    "providerId": "github-copilot",
-    "modelId": "claude-opus-4.6"
+    "providerId": "custom-openai",
+    "modelId": "gpt-5.6-sol"
   },
   "defaultThinkingLevel": "high",
   "providerRequest": {
@@ -383,9 +422,25 @@ Ownership is:
     "maxRetries": 0,
     "maxRetryDelayMs": 60000,
     "cacheRetention": "short"
+  },
+  "customProvider": {
+    "baseUrl": "http://host.docker.internal:4000/v1",
+    "modelId": "gpt-5.6-sol",
+    "modelName": "GPT-5.6 SOL",
+    "contextWindow": 1050000,
+    "maxTokens": 128000,
+    "reasoning": true
   }
 }
 ```
+
+`customProvider.baseUrl` is the API root such as `https://host/v1`, not the full
+`/chat/completions` route. `modelName`, `contextWindow`, `maxTokens`, and
+`reasoning` are optional; their defaults are the model ID, 128,000, 16,384, and
+`false`. The definition is startup configuration and is intentionally absent
+from `AgentConfigurationUpdate`; edit it while the Agent is stopped and restart
+to rebuild Provider registration. The API key remains a `custom-openai` entry in
+`credentials.json` or the `CUSTOM_OPENAI_API_KEY` environment variable.
 
 Provider implementation objects are never serialized. Credentials are never
 written to `agent.json` or Session JSONL. Arbitrary request headers and metadata
@@ -406,11 +461,11 @@ For a new Session, model selection precedence is:
 ```text
 explicit CreateSessionOptions.model
   > persisted Agent defaultModel
-  > compiled application default
 ```
 
-On first startup, the compiled application default is written to `agent.json`
-so subsequent starts have one explicit global setting.
+The Agent may start without a default model. Creating a new Session without an
+explicit model then fails with `model_not_configured`; Provider management and
+existing Sessions remain available.
 
 `defaultModel` is one atomic provider/model pair. It represents both the
 default provider and that provider's corresponding default model; separate
@@ -485,16 +540,34 @@ interface Agent {
 Returned values are Agent-owned serializable summaries, not objects from
 `@loopiq/ai`.
 
-`listProviders()` returns all eleven registered providers and their local
-credential-presence state without network access. A `validateCredentials`
+`listProviders()` returns all registered built-ins plus `custom-openai` when it
+is configured, together with their local credential-presence state without
+network access. A `validateCredentials`
 option performs online validation and returns status for each credential-backed
 provider. UI switchers must display only entries whose resulting status is
 `valid`; the Agent enforces the same rule when `updateSession()` is called, so a
 client cannot bypass it.
 
-Model listing uses the last known local catalog by default. An explicit refresh
-option may perform network discovery for a dynamic provider. Listing models
-must not start interactive login.
+An unscoped `listModels()` reads local credential presence and includes only
+Providers represented in `credentials.json`; missing Providers are not exposed
+as locally configured choices. A scoped `listModels(providerId)` remains an
+explicit catalog-inspection operation and may inspect any registered Provider.
+An explicit refresh option may perform network discovery for each included
+dynamic Provider.
+
+GitHub Copilot is the account-scoped exception in either form: whenever it is
+included, listing requires its persisted OAuth credential, refreshes it through
+the Provider OAuth implementation, persists any rotated token and returned
+`availableModelIds`, and returns only the intersection with the local catalog.
+Discovery errors are reported instead of falling back to the static catalog;
+`refresh: true` is therefore redundant for this Provider. Listing models never
+starts interactive login or validates unrelated Provider credentials.
+
+`custom-openai` is the static-catalog exception. When configured, scoped model
+listing returns its one local model without a credential or network request;
+unscoped listing still requires local credential presence under the normal
+rule. `refresh: true` is a no-op because configuration, not the remote endpoint,
+owns this catalog.
 
 `getProviderStatus()` returns the current in-memory validation result when it is
 still fresh; otherwise it reports only local credential presence as `unchecked`
@@ -563,12 +636,12 @@ that process's configuration snapshot. `updateConfiguration()` delegates to
 `AgentSettings`, which updates both the in-memory snapshot and `agent.json`
 through an atomic, cross-process-safe write.
 
-The snapshot contains the default model, default thinking level, and safe
-Provider request policy. The compiled thinking default is `high`. Default model
-and thinking changes affect only new Sessions; existing Sessions retain their
-JSONL-persisted values. Request policy is process-wide and each turn snapshot
-reads its current value, so an update affects the next Provider request without
-mutating one already in flight.
+The snapshot contains the optional default model, default thinking level, and
+safe Provider request policy. The compiled thinking default is `high`. Default
+model and thinking changes affect only new Sessions; existing Sessions retain
+their JSONL-persisted values. Request policy is process-wide and each turn
+snapshot reads its current value, so an update affects the next Provider request
+without mutating one already in flight.
 
 The request policy contains transport, a positive timeout, non-negative
 Provider retry count, non-negative server-requested retry-delay cap, and cache
@@ -667,7 +740,7 @@ CLI or Server
   -> await createAgent()
   -> Agent loads agent.json
   -> Agent creates ModelRuntime
-  -> ModelRuntime registers all eleven supported providers
+  -> ModelRuntime registers the built-ins and configured custom Provider
   -> Agent returns without reading or validating the credential online
 
 later: run(Session)
@@ -695,7 +768,9 @@ agent.addProviderCredential("github-copilot", {
   -> provider emits device-code/login events
   -> adapter renders or transports those events
   -> provider returns a candidate credential
-  -> Agent validates the candidate online
+  -> Agent intersects account availability with its local model catalog
+  -> adapter renders the Agent-owned model selection prompt
+  -> Agent validates the candidate with the selected model
   -> Agent saves it under the provider id only after validation succeeds
   -> credential addition completes
 
@@ -707,7 +782,7 @@ agent.run(sessionId, input)
 
 ```text
 createAgent()
-  -> registers all eleven providers
+  -> registers the built-ins and configured custom Provider
   -> leaves credentials.json unchanged
   -> returns without prompting or online validation
 
@@ -733,6 +808,7 @@ agent.addProviderCredential(providerId, method, interaction)
   -> verify provider and method are registered
   -> complete API-token prompt or OAuth flow
   -> stage the candidate credential outside the durable store
+  -> for a first GitHub Copilot OAuth login, select one account-available local model
   -> run the provider-specific authenticated validation strategy
   -> validation failed: preserve the previous credential, return an error
   -> validation succeeded: atomically replace credentials.json entry
@@ -803,6 +879,30 @@ agent.run(sessionId, input)
 There is no authentication preflight. Missing authentication is ordinary Run
 execution failure, so adapters receive the same handle, events, persisted error
 message, and settlement lifecycle as other Provider failures.
+
+### List account-available GitHub Copilot models
+
+```text
+agent.listModels("github-copilot")
+  -> require a persisted GitHub Copilot OAuth credential
+  -> refresh through the Provider OAuth implementation under the credential lock
+  -> the Provider requests its current /models catalog
+  -> persist the refreshed credential and availableModelIds
+  -> intersect those IDs with the Agent's local GitHub Copilot catalog
+  -> return only the intersection
+  -> any refresh/catalog error fails the command without a static fallback
+```
+
+### List models for locally configured Providers
+
+```text
+agent.listModels()
+  -> inspect credential presence for every registered Provider
+  -> skip Providers missing from credentials.json
+  -> use each included Provider's local catalog by default
+  -> refresh GitHub Copilot account availability when it is included
+  -> return one combined serializable model list
+```
 
 ### Expired OAuth access token
 
@@ -883,6 +983,7 @@ packages/agent/src/
     model-runtime.ts
     provider-types.ts
     builtin-providers.ts
+    custom-openai.ts
     file-credential-store.ts
   session/
     agent-session-manager.ts
@@ -891,11 +992,12 @@ packages/agent/src/
     json-file.ts
 ```
 
-Provider and credential behavior belongs under `model/`; Agent-wide settings
-belong under `configuration/`; Session behavior belongs under `session/`.
-Shared persistence files are dependency-leaf primitives and import no business
-types. Platform usage does not justify a top-level technical bucket. No file is
-added or changed under `packages/ai`.
+The custom OpenAI-compatible Provider implementation, application registration,
+dynamic catalog orchestration, and credential behavior belong under `model/`.
+Agent-wide settings belong under `configuration/`; Session behavior belongs
+under `session/`. Shared persistence files are dependency-leaf primitives and
+import no business types. Platform usage does not justify a top-level technical
+bucket.
 
 ## Implementation Record
 
@@ -903,7 +1005,7 @@ added or changed under `packages/ai`.
 2. Add a single file credential store with correct `modify()`, locking, atomic
    writes, permissions, and tests.
 3. Add the Agent settings store and the single current `agent.json` shape.
-4. Add `ModelRuntime` with the agreed eleven-provider registration list, model
+4. Add `ModelRuntime` with the agreed built-in registration list, model
    lookup, credential validation strategies, credential mutation, status, and
    stream capability.
 5. Make `createAgent()` asynchronous and internalize concrete construction.
@@ -920,6 +1022,10 @@ added or changed under `packages/ai`.
     implemented.
 12. Run build, type checking, unit tests, CLI integration tests, Server tests,
     and a shared-Agent-Home cross-process credential test.
+13. Replace the local LiteLLM-specific catalog bridge with one standalone,
+    configuration-driven Agent Chat Completions Provider composed from public
+    `@loopiq/ai` primitives while retaining Agent ownership of registration and
+    local settings.
 
 Future changes to this behavior must update
 [`multi-session-runtime.md`](./multi-session-runtime.md),
@@ -938,9 +1044,14 @@ Future changes to this behavior must update
 ### Authentication
 
 - explicit API-key and OAuth login persistence;
-- all eleven agreed providers are registered without credentials;
+- all agreed built-ins are registered without credentials and `custom-openai`
+  is registered only when configured;
 - only a provider with a persisted, valid credential is switchable;
 - candidate credentials are validated before first persistence;
+- GitHub Copilot uses the public device flow without an Enterprise-domain prompt;
+- first GitHub Copilot OAuth login selects from the account/local model intersection;
+- empty or invalid GitHub Copilot selections do not persist the candidate;
+- GitHub Copilot credential replacement does not repeat model selection;
 - invalid replacement credentials preserve the previous credential;
 - invalid, unavailable, and unchecked validation states remain distinct;
 - validation results expire and are refreshed before a later switch;
@@ -970,6 +1081,8 @@ Future changes to this behavior must update
 
 ### Model selection
 
+- Agent construction and Provider management work without a default model;
+- creating a new Session without an explicit or default model fails clearly;
 - explicit new-Session model overrides the global default;
 - the default provider/model pair can be saved without a credential;
 - changing the global default affects only later Sessions;
@@ -979,6 +1092,13 @@ Future changes to this behavior must update
 - switching models within a provider verifies catalog ownership;
 - an unknown persisted provider/model fails instead of falling back;
 - a model-dependent command works immediately after another process logs in.
+- GitHub Copilot model listing refreshes account availability on every call;
+- GitHub Copilot listing returns only locally known account-available models;
+- GitHub Copilot discovery failure does not fall back to the static catalog.
+- custom Provider model listing uses the configured model without `/models`
+  discovery or a hard-coded whitelist;
+- unscoped model listing includes only Providers with persisted credentials;
+- scoped model listing can inspect a registered Provider before credentials are supplied.
 
 ### Adapter boundaries
 
@@ -993,7 +1113,7 @@ Future changes to this behavior must update
 All recorded decisions below are implemented:
 
 - [x] D1 — One Agent per process and many Sessions per Agent.
-- [x] D2 — `ModelRuntime` owns provider/model behavior and registers the agreed eleven providers.
+- [x] D2 — `ModelRuntime` owns provider/model behavior and registers the agreed built-ins plus the configured custom Provider.
 - [x] D3 — Public Agent construction is async, accepts no persistence-location option, and uses `~/.loopiq`.
 - [x] D4 — Agent construction performs no login or provider network access.
 - [x] D5 — `ModelRuntime` owns credential operations; the Agent facade exposes them and adapters provide interaction callbacks.

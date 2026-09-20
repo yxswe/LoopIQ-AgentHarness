@@ -7,12 +7,12 @@ import type { AgentConfiguration } from "./configuration/agent-configuration.ts"
 import { AgentSettings } from "./configuration/agent-settings.ts";
 import { FileAgentSettingsStore } from "./configuration/file-agent-settings-store.ts";
 import { AgentEngine } from "./engine/agent-engine.ts";
+import { createBuiltinProviderRegistrations } from "./model/builtin-providers.ts";
 import { FileCredentialStore } from "./model/file-credential-store.ts";
 import { ModelRuntime } from "./model/model-runtime.ts";
 import { AgentSessionManager } from "./session/agent-session-manager.ts";
 
 const COMPILED_DEFAULT_CONFIGURATION: AgentConfiguration = {
-	defaultModel: { providerId: "github-copilot", modelId: "claude-opus-4.6" },
 	defaultThinkingLevel: "high",
 	providerRequest: DEFAULT_PROVIDER_REQUEST_POLICY,
 };
@@ -38,11 +38,11 @@ async function createAgentInHome(options: AgentConstructionOptions): Promise<Age
 	const settingsStore = new FileAgentSettingsStore(options.agentHome);
 
 	// `configuration` is the validated in-memory snapshot loaded from agent.json. It
-	// currently contains exactly three Agent-wide choices: a default model reference
-	// such as `github-copilot/claude-opus-4.6`, the default thinking level (`high`),
+	// contains an optional default model reference, the default thinking level (`high`),
 	// and the safe Provider request policy (transport, timeout, retry limits, and
-	// cache retention). On first launch, loadOrCreate persists the production defaults
-	// or the injected test model; later launches reuse the existing file. This
+	// cache retention). On first launch, loadOrCreate persists the production policy
+	// defaults without inventing a model, or the injected test model; later launches
+	// reuse the existing file. This
 	// initialization performs no login, credential validation, catalog refresh, or
 	// other network operation.
 	const configuration = await settingsStore.loadOrCreate(
@@ -56,9 +56,9 @@ async function createAgentInHome(options: AgentConstructionOptions): Promise<Age
 	);
 
 	// FileCredentialStore owns `<agentHome>/credentials.json`, while ModelRuntime owns
-	// all model-domain behavior above it. The production runtime has the eleven
-	// supported Provider definitions registered (for example GitHub Copilot, OpenAI,
-	// Anthropic, Google, and OpenRouter), the local credential store, Provider/model
+	// all model-domain behavior above it. The production runtime registers the
+	// application-supported Provider definitions plus the optional configured custom
+	// OpenAI-compatible Provider, the local credential store, Provider/model
 	// catalog lookup, explicit OAuth/API-token setup and validation, credential removal,
 	// and the short-lived validation cache. Tests may instead supply a runtime with a
 	// controlled Provider. `modelRuntime.models` is a narrow view of the same internal
@@ -67,12 +67,10 @@ async function createAgentInHome(options: AgentConstructionOptions): Promise<Age
 	const modelRuntime =
 		"modelRuntime" in options
 			? options.modelRuntime
-			: new ModelRuntime({ credentials: new FileCredentialStore(options.agentHome) });
-
-	// Ensure only that the configured reference exists in the already registered
-	// local catalog. Passing `false` deliberately prevents an online catalog refresh,
-	// so Agent construction remains local and does not require authentication.
-	if (!("modelRuntime" in options)) await modelRuntime.resolveModel(configuration.defaultModel, false);
+			: new ModelRuntime({
+					credentials: new FileCredentialStore(options.agentHome),
+					registrations: createBuiltinProviderRegistrations(configuration.customProvider),
+				});
 
 	// AgentSettings is the sole owner of the live Agent configuration. It returns
 	// defensive snapshots, validates configuration updates, persists before exposing
