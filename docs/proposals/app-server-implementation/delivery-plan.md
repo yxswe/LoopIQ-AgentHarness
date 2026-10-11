@@ -257,8 +257,8 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | ID | State | Branch / PR | Evidence and next action |
 | --- | --- | --- | --- |
 | Baseline | Recorded | `codex/app-server-development` / `9cc7b8c` | Existing proposals committed unchanged; no implementation claim. |
-| 00 | In review | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | 284-line tracker and index link; local links, code fences and whitespace checks passed. |
-| 01 | In review | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes`, based on PR 00 | RPC envelopes implemented; 38 tests, build, typecheck, lint and browser-target bundle smoke passed. Owner review pending. |
+| 00 | Merged | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | Squash-merged into the development branch as `dc01155` on 2026-10-11; document checks passed. |
+| 01 | In review | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes`, base `codex/app-server-development` | Rebased after PR 00 merged; protocol code unchanged. Owner review pending. |
 | 02–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
@@ -268,8 +268,11 @@ long logs. Keep the source execution checklists consistent with this tracker.
 
 ### PR 01 developer evidence (2026-10-11)
 
-Implementation commit: `3a3bba0`; review: PR #10, base PR #9. Later tracker-only
-commits do not change the tested code.
+Implementation commit: `c6700db` (originally tested as `3a3bba0`); review: PR #10,
+base `codex/app-server-development`. PR #9 was squash-merged as `dc01155`.
+Only PR #10's two commits were rebased; `git range-diff` confirmed both patches
+unchanged and a tree comparison found no content change before this tracker
+update. Existing test evidence still applies; tracker-only changes add no code.
 
 Code: `packages/app-protocol/src/{rpc,index}.ts`; tests: `src/rpc.test.ts`.
 Validation: `npm run test -w @loopiq/app-protocol` discovered/passed 38 tests;
