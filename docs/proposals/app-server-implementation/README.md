@@ -1,9 +1,9 @@
 # App-server Implementation Plan
 
-Status: Planned, 2026-10-11. This directory contains execution instructions,
-not an implementation report. All work packages and acceptance cases start
-uncompleted. No protocol package, independent host, or migrated UI is claimed
-to exist because it is described here.
+Status: In progress, 2026-10-11. Implementation has started with the RPC envelope
+slice in document 01. Only behavior backed by an implementation/evidence record
+is implemented; unchecked work and the remaining stages are planned. No
+independent host or migrated UI exists yet.
 
 Source inspection baseline: `43f8e3194b627de1d1d640183a0a20f349e26bc7`.
 Recheck the checkout when implementation begins; source links identify owners,
@@ -39,7 +39,7 @@ confirmed product decisions.
 
 | Step | Execution document | Owners touched | Deliverable | Status |
 | --- | --- | --- | --- | --- |
-| 01 | [Protocol contracts](./01-protocol-contracts.md) | P; consumer boundary types | Shared validated wire contract and browser-safe package. | Planned |
+| 01 | [Protocol contracts](./01-protocol-contracts.md) | P; consumer boundary types | Shared validated wire contract and browser-safe package. | In progress |
 | 02 | [Durable Session execution](./02-durable-session-execution.md) | R2; existing Session storage and facade | Durable acceptance, identity-based control, retained queries/results, recovery, and compatible CLI behavior. | Planned |
 | 03 | [Runtime host and connection](./03-runtime-host-and-connection.md) | R1 + A3 | Independently running host and one authenticated, bounded, reconnecting backend link. | Planned |
 | 04 | [App-server Session application](./04-appserver-session-application.md) | A1 + A2; A3 readiness integration | Frontend RPC admission, durable catalog, lifecycle coordination, and authoritative inventory merge. | Planned |

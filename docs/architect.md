@@ -18,6 +18,8 @@ implements one Agent application with HTTP, CLI, and DevUI adapters:
   hosts multiple Sessions on one shared engine and exposes REST/SSE APIs.
 - `@loopiq/devui` — a minimal web UI (static assets) for exercising the server.
 - `@loopiq/cli` — standalone headless and interactive command-line adapter.
+- `@loopiq/app-protocol` — dependency-leaf RPC envelope schemas/parser for the
+  planned app-server split; current adapters do not consume it yet.
 - `integrations/harbor` — Harbor-side import-path adapter and in-container CLI
   supervisor for isolated local evaluations.
 
@@ -32,7 +34,7 @@ Harbor adapter -> @loopiq/cli executable
 
 `@loopiq/devui` is framework-free static frontend served by `@loopiq/server`.
 
-Build order: `ai`, then `agent`, then `cli`. The server runs directly
+Build order: `app-protocol`, `ai`, then `agent`, then `cli`. The server runs directly
 through Bun.
 
 ## Tooling & Configuration
@@ -59,6 +61,17 @@ Purpose: provider-agnostic LLM API with model discovery and streaming.
 
 Key concepts: lazy-loaded model interface supporting streaming message exchange,
 thinking levels (off → xhigh), and image models.
+
+## Package: `@loopiq/app-protocol`
+
+`packages/app-protocol` is a private, browser-compatible contract package with
+no Agent/provider or platform dependency. Its initial surface classifies and
+validates JSON-RPC request, notification, success, and error envelopes using
+TypeBox schemas with derived types. Method payloads, admission, byte limits and
+WebSocket integration remain planned; current Server/CLI behavior is unchanged.
+
+The implemented encoding and parser contract is documented in
+[`packages/app-protocol/README.md`](../packages/app-protocol/README.md).
 
 ## Agent (`packages/agent`)
 
