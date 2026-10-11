@@ -17,6 +17,11 @@ defines the target behavior. This index defines order and acceptance coverage;
 each numbered document supplies source entry points, contracts, work packages,
 failure cases, validation commands, and migration duties.
 
+The [delivery tracker](./delivery-plan.md) records the development branch,
+small PR sequence, four integration milestones, owner-operated E2E acceptance,
+and actual progress. Use it to coordinate reviews; the numbered documents keep
+their detailed implementation and automated acceptance requirements.
+
 The [current architecture](../../architect.md) and its linked subsystem documents
 describe implemented code. Read them before editing code and update them with
 each behavioral change. The [decision log](../app-server-runtime-split.md) and
