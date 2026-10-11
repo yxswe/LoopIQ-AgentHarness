@@ -257,7 +257,7 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | ID | State | Branch / PR | Evidence and next action |
 | --- | --- | --- | --- |
 | Baseline | Recorded | `codex/app-server-development` / `9cc7b8c` | Existing proposals committed unchanged; no implementation claim. |
-| 00 | In review | `codex/app-server-delivery-plan` | 284-line tracker and index link; local links, code fences and whitespace checks passed. |
+| 00 | In review | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | 284-line tracker and index link; local links, code fences and whitespace checks passed. |
 | 01 | Planned | `codex/app-server-01-rpc-envelopes` | First code slice; only the RPC envelope/package boundary. |
 | 02–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
