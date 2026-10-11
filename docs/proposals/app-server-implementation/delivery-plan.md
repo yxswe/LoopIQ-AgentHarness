@@ -258,7 +258,7 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | --- | --- | --- | --- |
 | Baseline | Recorded | `codex/app-server-development` / `9cc7b8c` | Existing proposals committed unchanged; no implementation claim. |
 | 00 | In review | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | 284-line tracker and index link; local links, code fences and whitespace checks passed. |
-| 01 | In review | `codex/app-server-01-rpc-envelopes`, based on PR 00 | RPC envelopes implemented; 38 tests, build, typecheck, lint and browser-target bundle smoke passed. Owner review pending. |
+| 01 | In review | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes`, based on PR 00 | RPC envelopes implemented; 38 tests, build, typecheck, lint and browser-target bundle smoke passed. Owner review pending. |
 | 02–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
@@ -267,6 +267,9 @@ updates; limitations; next usable interface. Link evidence rather than pasting
 long logs. Keep the source execution checklists consistent with this tracker.
 
 ### PR 01 developer evidence (2026-10-11)
+
+Implementation commit: `3a3bba0`; review: PR #10, base PR #9. Later tracker-only
+commits do not change the tested code.
 
 Code: `packages/app-protocol/src/{rpc,index}.ts`; tests: `src/rpc.test.ts`.
 Validation: `npm run test -w @loopiq/app-protocol` discovered/passed 38 tests;
