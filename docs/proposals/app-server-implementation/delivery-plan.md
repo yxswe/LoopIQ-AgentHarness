@@ -265,7 +265,7 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | 00 | Merged | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | Squash-merged into the development branch as `dc01155` on 2026-10-11; document checks passed. |
 | 01 | Merged | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes` | Squash-merged into the development branch as `bdfc71f` on 2026-10-14. |
 | 02a | Merged | [#11](https://github.com/yxswe/LoopIQ-AgentHarness/pull/11), `codex/app-server-02a-initialization` | Squash-merged into the development branch as `d7bbfd7` on 2026-10-14. |
-| 02b | In progress | `codex/app-server-02b-errors-and-bounds`, base `codex/app-server-development` | Developer verification passed; PR creation pending. |
+| 02b | In review | [#12](https://github.com/yxswe/LoopIQ-AgentHarness/pull/12), `codex/app-server-02b-errors-and-bounds`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
 | 03–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
@@ -353,9 +353,11 @@ this isolated contract addition; `packages/ai` stays read-only. Owner M1 E2E is 
 
 ### PR 02b developer evidence (2026-10-14)
 
-Implementation: `codex/app-server-02b-errors-and-bounds`, based on `d7bbfd7` after
-PR #11 merged. The development branch was fast-forwarded; no merged feature
-commits were replayed. Review PR creation is pending.
+Implementation: `4c3d021`; review: [#12](https://github.com/yxswe/LoopIQ-AgentHarness/pull/12),
+base `codex/app-server-development` at `d7bbfd7` after PR #11 merged. The
+development branch was fast-forwarded; no merged feature commits were replayed.
+The follow-up tracker change only records the implementation commit and PR link;
+it changes no tested code.
 
 Code: `packages/app-protocol/src/{rpc,connection,limits,index}.ts`. Co-located
 tests cover strict errors, caller delivery classification and UTF-8 bounds.
