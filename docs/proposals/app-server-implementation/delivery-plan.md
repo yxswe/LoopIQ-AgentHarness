@@ -264,8 +264,9 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | Baseline | Recorded | `codex/app-server-development` / `9cc7b8c` | Existing proposals committed unchanged; no implementation claim. |
 | 00 | Merged | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | Squash-merged into the development branch as `dc01155` on 2026-10-11; document checks passed. |
 | 01 | Merged | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes` | Squash-merged into the development branch as `bdfc71f` on 2026-10-14. |
-| 02a | In review | [#11](https://github.com/yxswe/LoopIQ-AgentHarness/pull/11), `codex/app-server-02a-initialization`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
-| 02b, 03–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
+| 02a | Merged | [#11](https://github.com/yxswe/LoopIQ-AgentHarness/pull/11), `codex/app-server-02a-initialization` | Squash-merged into the development branch as `d7bbfd7` on 2026-10-14. |
+| 02b | In progress | `codex/app-server-02b-errors-and-bounds`, base `codex/app-server-development` | Developer verification passed; PR creation pending. |
+| 03–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
 paths; exact commands/results/test count; affected Dxx/Txx/AC IDs; documentation
@@ -349,6 +350,50 @@ describe the slice. No speculative dispatcher or injection boundary was added.
 Authentication/readiness enforcement, business payloads and sockets remain
 planned. PR 02b is next. Root build and Agent/CLI regressions were not run for
 this isolated contract addition; `packages/ai` stays read-only. Owner M1 E2E is Pending.
+
+### PR 02b developer evidence (2026-10-14)
+
+Implementation: `codex/app-server-02b-errors-and-bounds`, based on `d7bbfd7` after
+PR #11 merged. The development branch was fast-forwarded; no merged feature
+commits were replayed. Review PR creation is pending.
+
+Code: `packages/app-protocol/src/{rpc,connection,limits,index}.ts`. Co-located
+tests cover strict errors, caller delivery classification and UTF-8 bounds.
+`tsconfig.json` adds standard Web API types for `TextEncoder`; Node types remain
+excluded. No production adapter currently consumes these contracts.
+
+Validation from the repository root:
+
+- `npm run test -w @loopiq/app-protocol`: 143 tests passed in three files (63 new).
+- `npm run typecheck -w @loopiq/app-protocol` and
+  `npm run build -w @loopiq/app-protocol`: passed.
+- `npx --no-install biome check packages/app-protocol/src`: passed.
+- `git diff --check`: passed. All 23 business reasons matched target design 5.2.
+  The five changed Markdown files passed all 108 local-link and code-fence checks.
+
+Browser-target command:
+
+```sh
+bun build ./packages/app-protocol/src/index.ts --target=browser --outfile=/tmp/loopiq-app-protocol-02b-browser.mjs --metafile=/tmp/loopiq-app-protocol-02b-browser-meta.json
+```
+
+`node --experimental-vm-modules --input-type=module` verified compiled ESM error
+and delivery schemas. The bundle loaded through `SourceTextModule` in
+`createContext({ TextEncoder, TextDecoder })`, with an import-rejecting linker.
+Emoji input at/above 64 KiB, oversized multibyte parsing and failure-envelope
+parsing passed; metadata excluded Agent/provider and external imports. Node
+25.4.0, Bun 1.3.10. This is bundle/VM evidence, not browser or network E2E.
+
+Partial D01-02/D01-05 and T01-01/T01-02/T01-06/T01-07/T01-08/T01-09 support
+AC-01/AC-02/AC-09/AC-22. Architecture, package README and document 01 describe
+the slice. The parser's 32 MiB guard is active; 64 KiB input and 16 MiB response
+checks are shared helpers awaiting handlers. Classification decisions and timers
+remain with future connection owners. Root build and Agent/CLI regressions were
+not run for this isolated protocol change; `packages/ai` stays read-only.
+
+Manual review: run the package tests, inspect the error and delivery fixtures,
+then compare the `limits.test.ts` cases one byte below/at/above each default.
+No server is needed. Owner M1 E2E is Pending; PR 03 is next.
 
 For each milestone append:
 

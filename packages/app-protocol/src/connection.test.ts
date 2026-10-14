@@ -1,6 +1,7 @@
 import { Check } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+	DeliveryClassificationSchema,
 	FrontendInitializeParamsSchema,
 	InitializeResultSchema,
 	isMethodAllowed,
@@ -86,6 +87,22 @@ describe("connection initialization", () => {
 	])("rejects invalid or internal Runtime status fields: %j", (status) => {
 		expect(Check(RuntimeStatusSchema, status)).toBe(false);
 	});
+});
+
+describe("caller delivery knowledge", () => {
+	it.each([
+		["timeout after forwarding", "uncertain"],
+		["disconnect after forwarding", "uncertain"],
+		["authoritative SESSION_BUSY rejection", "rejected"],
+		["durable acceptance response", "confirmed"],
+	])("encodes %s independently of Run state", (_, classification) => {
+		expect(Check(DeliveryClassificationSchema, JSON.parse(JSON.stringify(classification)))).toBe(true);
+	});
+
+	it.each(["failed", "aborted", "accepted", "settled", "timeout", "SESSION_BUSY"])(
+		"excludes Run outcomes, causes and error reasons: %s",
+		(classification) => expect(Check(DeliveryClassificationSchema, classification)).toBe(false),
+	);
 });
 
 describe("RPC method directions", () => {

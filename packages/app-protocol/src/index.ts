@@ -1,4 +1,6 @@
 export {
+	type DeliveryClassification,
+	DeliveryClassificationSchema,
 	type FrontendInitializeParams,
 	FrontendInitializeParamsSchema,
 	type InitializeResult,
@@ -13,9 +15,15 @@ export {
 	type RuntimeStatus,
 	RuntimeStatusSchema,
 } from "./connection.ts";
+export { isWithinUtf8Limit, PROTOCOL_LIMITS } from "./limits.ts";
 export {
+	type BusinessErrorReason,
+	BusinessErrorReasonSchema,
 	type ParsedRpcMessage,
 	parseRpcMessage,
+	RPC_ERROR_CODES,
+	type RpcError,
+	RpcErrorSchema,
 	type RpcFailure,
 	RpcFailureSchema,
 	type RpcNotification,

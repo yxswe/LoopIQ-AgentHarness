@@ -1,5 +1,66 @@
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
+import { isWithinUtf8Limit, PROTOCOL_LIMITS } from "./limits.ts";
+
+export const RPC_ERROR_CODES = {
+	parseError: -32700,
+	invalidRequest: -32600,
+	methodNotFound: -32601,
+	invalidParams: -32602,
+	business: -32000,
+} as const;
+
+export const BusinessErrorReasonSchema = Type.Union([
+	Type.Literal("NOT_INITIALIZED"),
+	Type.Literal("UNAUTHORIZED"),
+	Type.Literal("VERSION_UNSUPPORTED"),
+	Type.Literal("RUNTIME_ALREADY_CONNECTED"),
+	Type.Literal("RUNTIME_OFFLINE"),
+	Type.Literal("RUNTIME_SYNCING"),
+	Type.Literal("SESSION_BUSY"),
+	Type.Literal("CAPACITY_EXCEEDED"),
+	Type.Literal("STALE_RUN"),
+	Type.Literal("RUN_NOT_SETTLED"),
+	Type.Literal("SUBMISSION_CONFLICT"),
+	Type.Literal("CREATION_CONFLICT"),
+	Type.Literal("CONFIGURATION_INVALID"),
+	Type.Literal("SESSION_NOT_FOUND"),
+	Type.Literal("SESSION_DELETED"),
+	Type.Literal("WORKSPACE_INVALID"),
+	Type.Literal("SESSION_LOCKED"),
+	Type.Literal("STORAGE_UNAVAILABLE"),
+	Type.Literal("RECOVERY_REQUIRED"),
+	Type.Literal("SNAPSHOT_TOO_LARGE"),
+	Type.Literal("INPUT_TOO_LARGE"),
+	Type.Literal("OBSERVATION_EXPIRED"),
+	Type.Literal("INTERACTION_UNSUPPORTED"),
+]);
+
+export const RpcErrorSchema = Type.Union([
+	Type.Object(
+		{
+			code: Type.Union([
+				Type.Literal(RPC_ERROR_CODES.parseError),
+				Type.Literal(RPC_ERROR_CODES.invalidRequest),
+				Type.Literal(RPC_ERROR_CODES.methodNotFound),
+				Type.Literal(RPC_ERROR_CODES.invalidParams),
+			]),
+			message: Type.String(),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			code: Type.Literal(RPC_ERROR_CODES.business),
+			message: Type.String(),
+			data: Type.Object({ reason: BusinessErrorReasonSchema }, { additionalProperties: false }),
+		},
+		{ additionalProperties: false },
+	),
+]);
+
+export type BusinessErrorReason = Static<typeof BusinessErrorReasonSchema>;
+export type RpcError = Static<typeof RpcErrorSchema>;
 
 const rpcId = Type.String({ minLength: 1 });
 const callFields = {
@@ -36,20 +97,22 @@ export type ParsedRpcMessage =
 	| { kind: "notification"; message: RpcNotification }
 	| { kind: "success"; message: RpcSuccess }
 	| { kind: "failure"; message: RpcFailure }
+	| { kind: "tooLarge" }
 	| { kind: "invalid"; code: -32700 | -32600 };
 
-/** Classify bounded JSON text; endpoint owners validate method-specific payloads. */
+/** Bound and classify JSON text; endpoint owners validate payloads, including error data. */
 export function parseRpcMessage(text: string): ParsedRpcMessage {
+	if (!isWithinUtf8Limit(text, PROTOCOL_LIMITS.jsonMessageBytes)) return { kind: "tooLarge" };
 	let value: unknown;
 	try {
 		value = JSON.parse(text);
 	} catch {
-		return { kind: "invalid", code: -32700 };
+		return { kind: "invalid", code: RPC_ERROR_CODES.parseError };
 	}
 
 	if (Check(RpcRequestSchema, value)) return { kind: "request", message: value };
 	if (Check(RpcNotificationSchema, value)) return { kind: "notification", message: value };
 	if (Check(RpcSuccessSchema, value)) return { kind: "success", message: value };
 	if (Check(RpcFailureSchema, value)) return { kind: "failure", message: value };
-	return { kind: "invalid", code: -32600 };
+	return { kind: "invalid", code: RPC_ERROR_CODES.invalidRequest };
 }

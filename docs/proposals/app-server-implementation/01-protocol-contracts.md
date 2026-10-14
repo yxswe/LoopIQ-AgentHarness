@@ -1,8 +1,9 @@
 # 01 — Protocol Contracts
 
-Status: In progress. Delivery PRs 01 and 02a implement the RPC envelope/package
-and initialization/direction slices. Partial evidence records below describe
-that scope; unchecked work and full acceptance cases remain incomplete.
+Status: In progress. Delivery PRs 01, 02a and 02b implement RPC envelopes,
+initialization/directions, errors, delivery knowledge and byte checks. Partial
+evidence records below describe that scope; unchecked work and full acceptance
+cases remain incomplete.
 
 ## 1. Outcome and scope
 
@@ -35,9 +36,9 @@ and the [implementation index](./README.md) before making changes.
 | [DevUI](../../../packages/devui/public/app.js) | A plain browser script currently has no workspace-module loader. Browser consumption needs an explicit delivery path. |
 
 Placement: `packages/app-protocol/`, private to this workspace as
-`@loopiq/app-protocol`. The package contains RPC envelopes and connection
-initialization/direction contracts. Keep subsequent definitions organized around
-connection, Session, Run, and observation contracts. A small RPC envelope belongs
+`@loopiq/app-protocol`. The package contains RPC/connection contracts and shared
+UTF-8 bounds. Keep subsequent definitions organized around connection, Session,
+Run, and observation contracts. A small RPC envelope belongs
 with these contracts; do not add a generic application framework.
 
 P may depend on a browser-compatible schema library. It must not import
@@ -301,3 +302,25 @@ authorize handlers. PR 02b retains delivery classifications, errors and byte
 bounds; PRs 03–04 retain full method maps/domain schemas and browser delivery.
 Authentication, connection admission and readiness enforcement remain in 03/04.
 No full-step or manual acceptance checkbox is complete.
+
+### Partial implementation: delivery PR 02b (2026-10-14)
+
+`rpc.ts` adds strict v1 error payload schemas and all 23 business reasons from
+design section 5.2; generic failure envelopes still need that separate check.
+`connection.ts` adds caller delivery classification, independent of Run outcomes.
+`limits.ts` supplies the shared byte/timeout defaults and UTF-8 check. The parser
+now returns `tooLarge` before parsing messages above 32 MiB. The
+[package README](../../../packages/app-protocol/README.md) specifies inclusive
+limits, encoded-response accounting and the remaining handler responsibilities.
+
+All 143 tests passed (63 new): protocol/business error fixtures, internal/transport
+reason rejection, delivery knowledge, multibyte boundary checks at each default,
+JSON escaping, unmatched surrogates and pre-parse oversize rejection. Build,
+typecheck, scoped Biome and browser bundle/VM smoke passed; exact commands are
+recorded in the delivery tracker.
+
+This adds partial D01-02/D01-05 and T01-01/T01-02/T01-06/T01-07/T01-08/T01-09
+evidence for AC-01/AC-02/AC-09/AC-22. Classification decisions, timers, socket
+buffer bounds and business size rejection still need real connection/handler
+owners. No process, network or owner E2E claim is made. PR 03 adds Session/Run
+payloads; PR 04 completes observation contracts and browser delivery.

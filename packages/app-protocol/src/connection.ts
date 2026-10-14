@@ -22,6 +22,14 @@ export const RuntimeStatusSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
+/** Caller knowledge for one attempt, independent of the Run state and wire error. */
+export const DeliveryClassificationSchema = Type.Union([
+	Type.Literal("rejected"),
+	Type.Literal("uncertain"),
+	Type.Literal("confirmed"),
+]);
+
+export type DeliveryClassification = Static<typeof DeliveryClassificationSchema>;
 export type FrontendInitializeParams = Static<typeof FrontendInitializeParamsSchema>;
 export type RuntimeInitializeParams = Static<typeof RuntimeInitializeParamsSchema>;
 export type InitializeResult = Static<typeof InitializeResultSchema>;
