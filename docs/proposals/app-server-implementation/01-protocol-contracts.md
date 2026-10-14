@@ -1,8 +1,8 @@
 # 01 — Protocol Contracts
 
-Status: In progress. Delivery PR 01 implements the RPC envelope/package slice.
-The partial evidence record below describes that scope; unchecked work and the
-full acceptance cases remain incomplete.
+Status: In progress. Delivery PRs 01 and 02a implement the RPC envelope/package
+and initialization/direction slices. Partial evidence records below describe
+that scope; unchecked work and full acceptance cases remain incomplete.
 
 ## 1. Outcome and scope
 
@@ -35,9 +35,9 @@ and the [implementation index](./README.md) before making changes.
 | [DevUI](../../../packages/devui/public/app.js) | A plain browser script currently has no workspace-module loader. Browser consumption needs an explicit delivery path. |
 
 Placement: `packages/app-protocol/`, private to this workspace as
-`@loopiq/app-protocol`. The initial package contains RPC envelopes only.
-Keep subsequent definitions organized around connection,
-Session, Run, and observation contracts. A small RPC envelope definition belongs
+`@loopiq/app-protocol`. The package contains RPC envelopes and connection
+initialization/direction contracts. Keep subsequent definitions organized around
+connection, Session, Run, and observation contracts. A small RPC envelope belongs
 with these contracts; do not add a generic application framework.
 
 P may depend on a browser-compatible schema library. It must not import
@@ -280,3 +280,24 @@ its import metadata excluded Agent/provider code and external imports. This is
 bundle evidence, not browser E2E. Exact commands and review progress are in the
 [delivery tracker](./delivery-plan.md). Architecture and the package README now
 describe the implemented slice. No full-step checkbox is marked complete.
+
+### Partial implementation: delivery PR 02a (2026-10-14)
+
+`packages/app-protocol/src/connection.ts` defines integer protocol version 1,
+endpoint-specific initialization schemas, a shared initialization result,
+Runtime status and direction allowlists for every v1 request/notification name.
+The [package README](../../../packages/app-protocol/README.md) specifies the
+encodings and identity-accepted versus execution-ready distinction.
+
+The 42 fixtures in `src/connection.test.ts` cover handshake round trips, wrong
+endpoint/role fields, version/UUID failures, status payloads, and direction/kind
+rejection. All 80 package tests, typecheck, build and scoped Biome checks passed.
+The compiled package imports through ESM; the browser-target bundle loads without
+Node/Bun globals or external imports. Exact commands are in the delivery tracker.
+
+This adds partial D01-02/D01-03/D01-05 evidence for T01-01/T01-02/T01-03/T01-08
+and AC-01/AC-02. Direction permission alone does not validate domain payloads or
+authorize handlers. PR 02b retains delivery classifications, errors and byte
+bounds; PRs 03–04 retain full method maps/domain schemas and browser delivery.
+Authentication, connection admission and readiness enforcement remain in 03/04.
+No full-step or manual acceptance checkbox is complete.

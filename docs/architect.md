@@ -18,8 +18,9 @@ implements one Agent application with HTTP, CLI, and DevUI adapters:
   hosts multiple Sessions on one shared engine and exposes REST/SSE APIs.
 - `@loopiq/devui` — a minimal web UI (static assets) for exercising the server.
 - `@loopiq/cli` — standalone headless and interactive command-line adapter.
-- `@loopiq/app-protocol` — dependency-leaf RPC envelope schemas/parser for the
-  planned app-server split; current adapters do not consume it yet.
+- `@loopiq/app-protocol` — dependency-leaf RPC envelopes, initialization schemas
+  and method direction rules for the planned app-server split; current adapters
+  do not consume it yet.
 - `integrations/harbor` — Harbor-side import-path adapter and in-container CLI
   supervisor for isolated local evaluations.
 
@@ -65,10 +66,12 @@ thinking levels (off → xhigh), and image models.
 ## Package: `@loopiq/app-protocol`
 
 `packages/app-protocol` is a private, browser-compatible contract package with
-no Agent/provider or platform dependency. Its initial surface classifies and
-validates JSON-RPC request, notification, success, and error envelopes using
-TypeBox schemas with derived types. Method payloads, admission, byte limits and
-WebSocket integration remain planned; current Server/CLI behavior is unchanged.
+no Agent/provider or platform dependency. It validates JSON-RPC envelopes,
+endpoint-specific v1 initialization and Runtime availability using TypeBox
+schemas with derived types. A direction allowlist separates requests from
+notifications; initialization success does not establish Runtime readiness.
+Domain payloads, authentication, admission, byte limits and WebSocket integration
+remain planned; current Server/CLI behavior is unchanged.
 
 The implemented encoding and parser contract is documented in
 [`packages/app-protocol/README.md`](../packages/app-protocol/README.md).
