@@ -76,7 +76,8 @@ through the available system boundary, not claims that the future UI exists.
 | 01 | RPC envelope package | Browser-safe package, request/response/notification validation, string request IDs and null error correlation; malformed and ambiguous envelope fixtures. No handlers. |
 | 02a | Initialization and directions | Endpoint-specific initialize payloads, version, success/status distinction and method direction rules. No sockets or authentication implementation. |
 | 02b | Delivery, errors and bounds | Delivery classifications, protocol/business errors and UTF-8 byte limits; keep uncertainty separate from execution failure. |
-| 03 | Session and Run contracts | Lifecycle/Run method schemas, inventory and retained results; distinguish uncertainty, busy, accepted, and settled. |
+| 03a | Run contracts | Start/read/steer/abort/result schemas and retained display items; distinguish uncertain delivery, busy rejection, accepted work and settled outcomes. |
+| 03b | Session lifecycle and catalog contracts | Session method schemas, public catalog/availability and authoritative inventory/deletion evidence. |
 | 04 | Observation contract and browser export | Item/snapshot/update/expiry schemas and browser consumption smoke test; close document 01's contract checklist. |
 | 05 | Durable Session file format | Append/sync and atomic replacement, v2 migration/parser, torn-tail recovery; preserve legacy IDs/context and reject interior corruption. |
 | 06 | Writer ownership | Process-start-aware leases, atomic takeover/release, live-writer and ambiguous-legacy rejection. |
@@ -95,6 +96,11 @@ walkthrough. It does not defer durability testing until the end.
 PR 02 was split before implementation on 2026-10-14 so initialization/direction
 review stays separate from delivery/error/size semantics. The original scope
 and milestone gates are unchanged; 02b follows 02a before PR 03.
+
+PR 03 was split before implementation on 2026-10-14. Run contracts (03a) and
+Session/catalog/inventory contracts (03b) have separate owners and fixtures.
+03a includes the history item shape needed by retained results; PR 04 reuses it
+for snapshots/updates and completes directional method maps and browser delivery.
 
 M1 proves R2's recovery barrier using explicit process-ownership evidence from
 a fixture. Actual managed tool descendant cleanup belongs to PR 14. Keep that
@@ -265,8 +271,9 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | 00 | Merged | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | Squash-merged into the development branch as `dc01155` on 2026-10-11; document checks passed. |
 | 01 | Merged | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes` | Squash-merged into the development branch as `bdfc71f` on 2026-10-14. |
 | 02a | Merged | [#11](https://github.com/yxswe/LoopIQ-AgentHarness/pull/11), `codex/app-server-02a-initialization` | Squash-merged into the development branch as `d7bbfd7` on 2026-10-14. |
-| 02b | In review | [#12](https://github.com/yxswe/LoopIQ-AgentHarness/pull/12), `codex/app-server-02b-errors-and-bounds`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
-| 03–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
+| 02b | Merged | [#12](https://github.com/yxswe/LoopIQ-AgentHarness/pull/12), `codex/app-server-02b-errors-and-bounds` | Squash-merged into the development branch as `b30894f` on 2026-10-14. |
+| 03a | In progress | `codex/app-server-03a-run-contracts`, base `codex/app-server-development` at `b30894f` | Run schemas and fixtures; no execution implementation. |
+| 03b–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
 paths; exact commands/results/test count; affected Dxx/Txx/AC IDs; documentation
@@ -396,6 +403,46 @@ not run for this isolated protocol change; `packages/ai` stays read-only.
 Manual review: run the package tests, inspect the error and delivery fixtures,
 then compare the `limits.test.ts` cases one byte below/at/above each default.
 No server is needed. Owner M1 E2E is Pending; PR 03 is next.
+
+### PR 03a developer evidence (2026-10-14)
+
+Branch: `codex/app-server-03a-run-contracts`, base `codex/app-server-development`
+at `b30894f` after PR #12 merged. The local development branch was fast-forwarded;
+no merged feature commits were replayed. Implementation SHA and review URL will
+be recorded after creation.
+
+Code: `packages/app-protocol/src/{run,history,index}.ts`; fixtures: `src/run.test.ts`.
+Five Run method contracts cover exact identities, lookup uncertainty, terminal
+outcomes and retained display results. No current adapter consumes them.
+
+Validation from the repository root:
+
+- `npm run test -w @loopiq/app-protocol`: 217 tests passed in four files (74 new).
+- `npm run typecheck -w @loopiq/app-protocol` and
+  `npm run build -w @loopiq/app-protocol`: passed.
+- `npx --no-install biome check packages/app-protocol/src`: passed.
+- `git diff --cached --check` and 109 changed-Markdown local-link/code-fence checks: passed.
+
+Browser-target command:
+
+```sh
+bun build ./packages/app-protocol/src/index.ts --target=browser --outfile=/tmp/loopiq-app-protocol-03a-browser.mjs --metafile=/tmp/loopiq-app-protocol-03a-browser-meta.json
+```
+
+`node --experimental-vm-modules --input-type=module` validated compiled ESM
+Run schemas, then loaded the bundle through `SourceTextModule` with only standard
+Web globals and an import-rejecting linker. Run exports and response parsing
+passed; metadata contained no Agent/provider or external imports. This is
+bundle/VM evidence, not browser E2E.
+
+Partial D01-03/04/05 and T01-01/02/03/05/06/08/09 support AC-01/02/05/07/08/09/16;
+none of the execution guarantees is implemented by a schema. Architecture,
+package README and document 01 describe the slice. Root build and Agent/CLI
+regressions were not run for this isolated addition; `packages/ai` stays read-only.
+
+Manual review: run `npm run test -w @loopiq/app-protocol -- src/run.test.ts`,
+then compare the five method schemas with the README's success meanings.
+Owner M1 E2E is Pending. PR 03b (Session/catalog/inventory) is next.
 
 For each milestone append:
 

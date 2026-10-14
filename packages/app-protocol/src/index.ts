@@ -15,6 +15,7 @@ export {
 	type RuntimeStatus,
 	RuntimeStatusSchema,
 } from "./connection.ts";
+export { type HistoryItem, HistoryItemSchema } from "./history.ts";
 export { isWithinUtf8Limit, PROTOCOL_LIMITS } from "./limits.ts";
 export {
 	type BusinessErrorReason,
@@ -33,3 +34,23 @@ export {
 	type RpcSuccess,
 	RpcSuccessSchema,
 } from "./rpc.ts";
+export {
+	type ResultDetails,
+	ResultDetailsSchema,
+	RUN_METHOD_SCHEMAS,
+	type RunIdentity,
+	RunIdentitySchema,
+	type RunLookup,
+	RunLookupSchema,
+	type RunMethodMap,
+	type RunOutcome,
+	RunOutcomeSchema,
+	type RunRef,
+	RunRefSchema,
+	type RunResultView,
+	RunResultViewSchema,
+	type RunView,
+	RunViewSchema,
+	type SettledRunView,
+	SettledRunViewSchema,
+} from "./run.ts";

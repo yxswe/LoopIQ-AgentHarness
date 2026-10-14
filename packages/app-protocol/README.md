@@ -2,7 +2,7 @@
 
 Private, browser-compatible wire contracts for the app-server refactor. This
 package implements RPC envelopes, initialization/status schemas, direction rules,
-v1 errors, delivery classifications and UTF-8 size checks. Server and DevUI still
+v1 errors, delivery classifications, UTF-8 size checks and Run contracts. Server and DevUI still
 use their existing REST/SSE path; no WebSocket handler consumes this package yet.
 
 ## RPC envelope
@@ -28,7 +28,7 @@ materializing text; this parser guard does not bound socket buffering.
   encoded message bound, then apply direction and payload validation separately.
   On failure envelopes, validate `message.error` with `RpcErrorSchema` before
   using it as a v1 error. The generic envelope still permits unknown error data;
-  domain payload validation and admission remain planned.
+  Run payload schemas require a separate check; admission remains planned.
 
 Exported TypeBox schemas and their derived TypeScript types describe the same
 four envelope variants. The package imports no Agent/provider or platform APIs.
@@ -90,7 +90,46 @@ generation fencing and execution admission. No connection state machine exists y
 
 Responses follow pending request IDs and are not methods in this registry.
 Direction permission does not validate params/results or imply an installed
-handler. Domain schemas and complete typed method maps follow in PRs 03–04.
+handler. Run schemas are available below; Session schemas and complete directional
+method maps follow in PRs 03b–04.
+
+## Run commands and retained results
+
+`RUN_METHOD_SCHEMAS[method]` exposes `params` and `result` TypeBox schemas for
+both command hops. `RunMethodMap` derives each method's TypeScript types from
+those schemas. Validate the envelope and direction first, then the appropriate
+payload; `parseRpcMessage` alone does not perform this validation.
+
+| Method | Parameters | Success result |
+| --- | --- | --- |
+| `run/start` | `sessionId`, `submissionId`, nonempty `text` | `RunIdentity`: durable acceptance or recognition of the original submission, without waiting for completion. |
+| `run/read` | `sessionId` and exactly one of `runId` / `submissionId` | `RunLookup`: `known` with a `RunView`, `notAccepted`, or `unknown` with `recordsUnavailable` / `legacyHistory`. |
+| `run/steer` | Exact `sessionId` / `runId`, nonempty `text`, optional boolean `interruptCurrentInference` | Exactly `{}`: queued in the target Run, with no consumption or durable replay promise. |
+| `run/abort` | Exact `sessionId` / `runId` | `SettledRunView`: actual retained outcome after reservation release; normal completion may win the race. |
+| `run/result` | Exact `sessionId` / `runId` | `RunResultView`: settled Run, final assistant items, all output item IDs and result details. |
+
+Session, Run and submission IDs are bare 36-character UUIDs. Input is preserved
+without trimming or normalization; handlers must enforce the 64 KiB UTF-8 limit.
+`RunView` separates `accepted`, `running`, `settling` and `settled`. Only settled
+views carry `completedAt` (RFC 3339 date-time) and an outcome: `completed`,
+`aborted`, `interrupted`, or `failed` with a public `{ code, message }` error.
+Busy and unsettled-result rejection use RPC business errors; delivery uncertainty
+is neither a Run state nor a terminal outcome.
+
+`HistoryItemSchema` in `history.ts` owns the display shape reused by results
+and future observation contracts. Content is text; legacy `runId: null` and
+nonempty historical item IDs are preserved. Tool-call IDs remain separate opaque
+strings. Item timestamps are RFC 3339 date-times; revisions and optional token
+counts are nonnegative safe integers. `RunResultView.finalItems` admits only
+assistant items with a Run ID; an interrupted Run may have no output items.
+Usage retains `complete`, `partial` or `unavailable` coverage without defaulting
+missing counts. Objects reject extra fields, including internal provider data.
+
+These are shape checks. Runtime owners must establish durable acceptance and
+settlement, reserve `notAccepted` for authoritative submission lookups, match
+response identities, resolve item references and report truthful usage. Mappers
+must construct safe text; schemas cannot redact embedded secrets or prove these
+relationships. Execution, storage, dispatch and sockets remain unimplemented.
 
 ## Errors and delivery knowledge
 
@@ -162,3 +201,5 @@ To review the initialization/direction slice alone, run
 valid handshake, wrong-endpoint, unsupported-version and direction fixtures.
 The 02b fixtures are in `rpc.test.ts` (strict errors), `connection.test.ts`
 (delivery knowledge), and `limits.test.ts` (byte boundaries and the parser guard).
+For 03a, run `npm run test -w @loopiq/app-protocol -- src/run.test.ts` and inspect
+method round trips, ambiguous lookups, terminal outcomes and retained items.

@@ -1,7 +1,7 @@
 # App-server Implementation Plan
 
 Status: In progress, 2026-10-14. Document 01 now covers RPC envelopes, initialization,
-directions, errors, delivery knowledge and byte checks. Only behavior backed by
+directions, errors, delivery knowledge, byte checks and Run contracts. Only behavior backed by
 an implementation/evidence record is implemented; unchecked work and the
 remaining stages are planned. No independent host or migrated UI exists yet.
 
