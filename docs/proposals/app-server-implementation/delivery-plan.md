@@ -74,7 +74,8 @@ through the available system boundary, not claims that the future UI exists.
 | ID | Single review unit | Boundary and required verification |
 | --- | --- | --- |
 | 01 | RPC envelope package | Browser-safe package, request/response/notification validation, string request IDs and null error correlation; malformed and ambiguous envelope fixtures. No handlers. |
-| 02 | Connection contract | Initialize payloads, version, direction rules, delivery classification, errors and byte limits. No sockets or authentication implementation. |
+| 02a | Initialization and directions | Endpoint-specific initialize payloads, version, success/status distinction and method direction rules. No sockets or authentication implementation. |
+| 02b | Delivery, errors and bounds | Delivery classifications, protocol/business errors and UTF-8 byte limits; keep uncertainty separate from execution failure. |
 | 03 | Session and Run contracts | Lifecycle/Run method schemas, inventory and retained results; distinguish uncertainty, busy, accepted, and settled. |
 | 04 | Observation contract and browser export | Item/snapshot/update/expiry schemas and browser consumption smoke test; close document 01's contract checklist. |
 | 05 | Durable Session file format | Append/sync and atomic replacement, v2 migration/parser, torn-tail recovery; preserve legacy IDs/context and reject interior corruption. |
@@ -90,6 +91,10 @@ Sources: [01 contracts](./01-protocol-contracts.md) and
 [02 durable execution](./02-durable-session-execution.md). Each prerequisite
 lands with its own fault tests; PR 12 assembles those fixtures into the manual
 walkthrough. It does not defer durability testing until the end.
+
+PR 02 was split before implementation on 2026-10-14 so initialization/direction
+review stays separate from delivery/error/size semantics. The original scope
+and milestone gates are unchanged; 02b follows 02a before PR 03.
 
 M1 proves R2's recovery barrier using explicit process-ownership evidence from
 a fixture. Actual managed tool descendant cleanup belongs to PR 14. Keep that
@@ -258,8 +263,9 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | --- | --- | --- | --- |
 | Baseline | Recorded | `codex/app-server-development` / `9cc7b8c` | Existing proposals committed unchanged; no implementation claim. |
 | 00 | Merged | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | Squash-merged into the development branch as `dc01155` on 2026-10-11; document checks passed. |
-| 01 | In review | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes`, base `codex/app-server-development` | Rebased after PR 00 merged; protocol code unchanged. Owner review pending. |
-| 02–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
+| 01 | Merged | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes` | Squash-merged into the development branch as `bdfc71f` on 2026-10-14. |
+| 02a | In progress | `codex/app-server-02a-initialization`, base `codex/app-server-development` | Developer verification passed; PR creation pending. |
+| 02b, 03–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
 paths; exact commands/results/test count; affected Dxx/Txx/AC IDs; documentation
@@ -299,6 +305,48 @@ README describe the slice. Endpoint/domain validation and size enforcement are
 next; existing adapters still use REST/SSE. The root build and runtime regression
 suites were not run for this isolated package slice; the root build writes into
 the read-only `packages/ai` dependency. No milestone or manual E2E is complete.
+
+### PR 02a developer evidence (2026-10-14)
+
+Implementation: `codex/app-server-02a-initialization`, based on `bdfc71f` after
+PR #10 merged. The local development branch was fast-forwarded to that commit;
+no PR #10 commits were replayed. Review PR creation is pending.
+
+Code: `packages/app-protocol/src/{connection,index}.ts`; fixtures:
+`src/connection.test.ts`. The package now fixes version 1, initialization/status
+shapes and direction/kind permission. Existing adapters do not consume it.
+
+Validation from the repository root:
+
+- `npm run test -w @loopiq/app-protocol`: 80 tests passed in two files.
+- `npm run test -w @loopiq/app-protocol -- src/connection.test.ts`: all 42 new
+  fixtures passed; this is the focused manual review recipe.
+- `npm run typecheck -w @loopiq/app-protocol` and
+  `npm run build -w @loopiq/app-protocol`: passed.
+- `npx --no-install biome check packages/app-protocol/src`: passed.
+- `git diff --check`: passed; all 106 local links and code fences in the five
+  changed Markdown files passed validation.
+
+Browser-target command:
+
+```sh
+bun build ./packages/app-protocol/src/index.ts --target=browser --outfile=/tmp/loopiq-app-protocol-02a-browser.mjs --metafile=/tmp/loopiq-app-protocol-02a-browser-meta.json
+```
+
+`node --experimental-vm-modules --input-type=module` imported the compiled ESM
+package and checked Runtime/frontend initialization fixtures. It also evaluated
+the bundle through `SourceTextModule` in `createContext({ TextEncoder, TextDecoder })`
+with an import-rejecting linker: initialization parsing, readiness notification
+direction, frontend notification rejection and batch rejection passed. Bundle
+metadata contained no Agent/provider or external imports. Node 25.4.0, Bun 1.3.10.
+This is bundle/VM evidence, not an actual browser or network E2E.
+
+Partial D01-02/D01-03/D01-05 and T01-01/T01-02/T01-03/T01-08 support AC-01/AC-02;
+no full acceptance case is closed. Architecture, package README and document 01
+describe the slice. No speculative dispatcher or injection boundary was added.
+Authentication/readiness enforcement, business payloads and sockets remain
+planned. PR 02b is next. Root build and Agent/CLI regressions were not run for
+this isolated contract addition; `packages/ai` stays read-only. Owner M1 E2E is Pending.
 
 For each milestone append:
 

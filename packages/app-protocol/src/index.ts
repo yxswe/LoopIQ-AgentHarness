@@ -1,4 +1,19 @@
 export {
+	type FrontendInitializeParams,
+	FrontendInitializeParamsSchema,
+	type InitializeResult,
+	InitializeResultSchema,
+	isMethodAllowed,
+	PROTOCOL_VERSION,
+	RPC_ENDPOINTS,
+	RPC_METHODS,
+	type RpcDirection,
+	type RuntimeInitializeParams,
+	RuntimeInitializeParamsSchema,
+	type RuntimeStatus,
+	RuntimeStatusSchema,
+} from "./connection.ts";
+export {
 	type ParsedRpcMessage,
 	parseRpcMessage,
 	type RpcFailure,
