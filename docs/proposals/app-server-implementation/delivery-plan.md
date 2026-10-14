@@ -264,7 +264,7 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | Baseline | Recorded | `codex/app-server-development` / `9cc7b8c` | Existing proposals committed unchanged; no implementation claim. |
 | 00 | Merged | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | Squash-merged into the development branch as `dc01155` on 2026-10-11; document checks passed. |
 | 01 | Merged | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes` | Squash-merged into the development branch as `bdfc71f` on 2026-10-14. |
-| 02a | In progress | `codex/app-server-02a-initialization`, base `codex/app-server-development` | Developer verification passed; PR creation pending. |
+| 02a | In review | [#11](https://github.com/yxswe/LoopIQ-AgentHarness/pull/11), `codex/app-server-02a-initialization`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
 | 02b, 03–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
@@ -308,9 +308,11 @@ the read-only `packages/ai` dependency. No milestone or manual E2E is complete.
 
 ### PR 02a developer evidence (2026-10-14)
 
-Implementation: `codex/app-server-02a-initialization`, based on `bdfc71f` after
-PR #10 merged. The local development branch was fast-forwarded to that commit;
-no PR #10 commits were replayed. Review PR creation is pending.
+Implementation: `2662d98`; review: [#11](https://github.com/yxswe/LoopIQ-AgentHarness/pull/11),
+base `codex/app-server-development` at `bdfc71f` after PR #10 merged. The local
+development branch was fast-forwarded to that commit; no PR #10 commits were
+replayed. The follow-up tracker change only records the implementation commit
+and PR link; it changes no tested code.
 
 Code: `packages/app-protocol/src/{connection,index}.ts`; fixtures:
 `src/connection.test.ts`. The package now fixes version 1, initialization/status
