@@ -1,17 +1,21 @@
 # App Protocol
 
 Private, browser-compatible wire contracts for the app-server refactor. This
-package implements RPC envelopes, initialization/status schemas and method
-direction rules. Server and DevUI still use their existing REST/SSE path; no
-WebSocket handler consumes this package yet.
+package implements RPC envelopes, initialization/status schemas, direction rules,
+v1 errors, delivery classifications and UTF-8 size checks. Server and DevUI still
+use their existing REST/SSE path; no WebSocket handler consumes this package yet.
 
 ## RPC envelope
 
 `parseRpcMessage(text)` returns a discriminated `kind`: `request`,
-`notification`, `success`, `failure`, or `invalid`. Valid variants contain the
-original parsed `message`. Invalid JSON returns code `-32700`; valid JSON with
+`notification`, `success`, `failure`, `invalid`, or `tooLarge`. Valid variants
+contain the original parsed `message`. Invalid JSON returns code `-32700`; valid JSON with
 an invalid envelope returns `-32600`. The parser does not send an error reply;
 the receiving endpoint decides how to handle malformed input or responses.
+Text exceeding the 32 MiB UTF-8 bound returns `{ kind: "tooLarge" }` before
+`JSON.parse`, even if the text is malformed. It carries no correlated request ID
+or fabricated business error. Transports must also bound incoming messages before
+materializing text; this parser guard does not bound socket buffering.
 
 - One JSON-RPC 2.0 object per message; batches are rejected.
 - Request and success IDs are nonempty strings. Error response IDs may also be
@@ -22,7 +26,9 @@ the receiving endpoint decides how to handle malformed input or responses.
 - An envelope match alone authorizes no command and establishes no payload safety
   guarantee. Call the parser only after the receiving transport has enforced its
   encoded message bound, then apply direction and payload validation separately.
-  Domain payloads, error data, admission and byte limits remain planned.
+  On failure envelopes, validate `message.error` with `RpcErrorSchema` before
+  using it as a v1 error. The generic envelope still permits unknown error data;
+  domain payload validation and admission remain planned.
 
 Exported TypeBox schemas and their derived TypeScript types describe the same
 four envelope variants. The package imports no Agent/provider or platform APIs.
@@ -84,8 +90,60 @@ generation fencing and execution admission. No connection state machine exists y
 
 Responses follow pending request IDs and are not methods in this registry.
 Direction permission does not validate params/results or imply an installed
-handler. Domain schemas and complete typed method maps follow in PRs 03–04;
-delivery classifications, error reasons and UTF-8 bounds follow in PR 02b.
+handler. Domain schemas and complete typed method maps follow in PRs 03–04.
+
+## Errors and delivery knowledge
+
+`RPC_ERROR_CODES` and `RpcErrorSchema` fix the supported v1 error payloads:
+
+| Code | Meaning | Payload |
+| --- | --- | --- |
+| `-32700` | Parse error | `code`, `message` |
+| `-32600` | Invalid request | `code`, `message` |
+| `-32601` | Method not found / disallowed direction | `code`, `message` |
+| `-32602` | Invalid params | `code`, `message` |
+| `-32000` | Business error | `code`, `message`, `data: { reason }` |
+
+`BusinessErrorReasonSchema` contains all 23 reasons from
+[design section 5.2](../../docs/proposals/app-server-runtime-design.md#52-errors).
+The strict schema rejects extra fields at both error and data levels; internal
+exceptions, stacks and provider headers are not public error objects. Callers
+must still construct safe message text; schemas cannot redact secrets in strings.
+RPC error correlation remains the original attempt ID, or `null` when unknown.
+
+`DeliveryClassificationSchema` describes the caller's knowledge of one attempt.
+It is separate metadata, not an extra RPC envelope/error field or a Run outcome:
+
+| Classification | Meaning |
+| --- | --- |
+| `rejected` | Evidence establishes that this attempt was refused; it says nothing about an earlier attempt with the same submission ID. |
+| `uncertain` | Forwarding/admission may have happened, but authoritative confirmation is unavailable. |
+| `confirmed` | A validated success response establishes the method's success meaning; start acceptance does not mean the Run has settled. |
+
+Timeout or disconnect after possible forwarding stays `uncertain`. Neither is a
+business reason, failed Run, implicit abort or permission to resend. A definitely
+unsent attempt can be rejected. Receiving an error alone does not prove absence
+of side effects; admission and operation evidence determine classification.
+Connection owners will implement that decision; the schema does not infer it.
+
+## Byte bounds
+
+`PROTOCOL_LIMITS` centralizes inclusive defaults. `isWithinUtf8Limit(text, maxBytes)`
+returns a boolean using standard `TextEncoder` UTF-8 encoding. It neither truncates
+nor changes the text. Unpaired UTF-16 surrogates encode as replacement characters.
+
+| Field | Default | Measured content / behavior |
+| --- | --- | --- |
+| `inputBytes` | 64 KiB | Raw input text; reject before admission with `INPUT_TOO_LARGE`. |
+| `jsonMessageBytes` | 32 MiB | Entire encoded JSON message, including the envelope; the parser returns `tooLarge`. |
+| `snapshotBytes`, `resultBytes` | 16 MiB each | Entire encoded snapshot/result RPC response; use `SNAPSHOT_TOO_LARGE` without truncating saved history. |
+| `rpcTimeoutMs` | 30 seconds | Ordinary wait deadline; stopping the wait does not cancel execution. |
+
+For snapshots/results, pass the complete `JSON.stringify(...)` response to the
+size check so escaping and envelope overhead count. Input and response owners
+must call the shared check when their handlers land; only the generic parser's
+32 MiB guard is wired today. Queue limits, timers and network rejection belong
+to the later transport/observation implementations.
 
 ## Development
 
@@ -102,3 +160,5 @@ are tracked in the [delivery plan](../../docs/proposals/app-server-implementatio
 To review the initialization/direction slice alone, run
 `npm run test -w @loopiq/app-protocol -- src/connection.test.ts` and inspect its
 valid handshake, wrong-endpoint, unsupported-version and direction fixtures.
+The 02b fixtures are in `rpc.test.ts` (strict errors), `connection.test.ts`
+(delivery knowledge), and `limits.test.ts` (byte boundaries and the parser guard).

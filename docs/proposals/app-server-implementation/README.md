@@ -1,9 +1,9 @@
 # App-server Implementation Plan
 
-Status: In progress, 2026-10-14. Document 01 now covers the RPC envelope and
-initialization/direction slices. Only behavior backed by an implementation/evidence
-record is implemented; unchecked work and the remaining stages are planned.
-No independent host or migrated UI exists yet.
+Status: In progress, 2026-10-14. Document 01 now covers RPC envelopes, initialization,
+directions, errors, delivery knowledge and byte checks. Only behavior backed by
+an implementation/evidence record is implemented; unchecked work and the
+remaining stages are planned. No independent host or migrated UI exists yet.
 
 Source inspection baseline: `43f8e3194b627de1d1d640183a0a20f349e26bc7`.
 Recheck the checkout when implementation begins; source links identify owners,
