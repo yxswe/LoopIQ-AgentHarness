@@ -1,7 +1,8 @@
 # 01 — Protocol Contracts
 
-Status: Planned. This document specifies implementation work; none of its
-checkboxes or acceptance cases claims an implemented feature.
+Status: In progress. Delivery PR 01 implements the RPC envelope/package slice.
+The partial evidence record below describes that scope; unchecked work and the
+full acceptance cases remain incomplete.
 
 ## 1. Outcome and scope
 
@@ -30,11 +31,12 @@ and the [implementation index](./README.md) before making changes.
 | [Session contracts](../../../packages/agent/src/session/session-contracts.ts) | Current `SessionSnapshot` is execution metadata, not the target observation snapshot. Current `RunResult` contains provider-shaped messages. |
 | [Event envelope](../../../packages/agent/src/session/event-envelope.ts) | Current `runtimeId`, `sequence`, and `run_settled` semantics cannot be renamed into service identity, view revision, and durable settlement. |
 | [Server](../../../packages/server/src/server.ts) | Current REST errors, direct Agent calls, and SSE payloads to replace. |
-| [Root package](../../../package.json), [root TypeScript config](../../../tsconfig.json), and [server config](../../../packages/server/tsconfig.json) | Workspace discovery, build order, and aliases. Current root build does not build a protocol or host package. |
+| [Root package](../../../package.json), [root TypeScript config](../../../tsconfig.json), and [server config](../../../packages/server/tsconfig.json) | Workspace discovery, build order, and aliases. Root build now includes the initial protocol package; no host package exists. |
 | [DevUI](../../../packages/devui/public/app.js) | A plain browser script currently has no workspace-module loader. Browser consumption needs an explicit delivery path. |
 
-Proposed placement: `packages/app-protocol/`, published only within this
-workspace as `@loopiq/app-protocol`. Keep definitions organized around connection,
+Placement: `packages/app-protocol/`, private to this workspace as
+`@loopiq/app-protocol`. The initial package contains RPC envelopes only.
+Keep subsequent definitions organized around connection,
 Session, Run, and observation contracts. A small RPC envelope definition belongs
 with these contracts; do not add a generic application framework.
 
@@ -220,8 +222,8 @@ npm run test -w @loopiq/agent
 npm run test -w @loopiq/cli
 ```
 
-The following commands are proposed interfaces to create in D01-01. They do
-not exist at the inspected baseline:
+The following commands now exist for the initial package slice. They do not
+yet establish completion of D01-01 or the full protocol contract:
 
 ```sh
 npm run build -w @loopiq/app-protocol
@@ -257,3 +259,24 @@ may be documented beside the schema without copying every type into prose.
 - [ ] T01-01 through T01-10 have implementation evidence and executed results.
 - [ ] Update the [index](./README.md) with actual tests, commands, commits, and
   any remaining limitations before marking this step complete.
+
+### Partial implementation: delivery PR 01 (2026-10-11)
+
+Implemented `packages/app-protocol/src/rpc.ts` and its public barrel, with
+schema-derived types and 38 envelope tests in `src/rpc.test.ts`. Nonempty string
+request IDs, null error correlation, required object params and exclusive
+request/response/notification shapes are fixed. Package build/typecheck/test
+scripts, root build ordering and the TypeScript alias exist.
+
+This supplies parts of D01-01/D01-02/D01-05 and envelope-level evidence relevant
+to T01-01/T01-02/T01-04/T01-08. It does not complete those work packages or
+endpoint/integration acceptance. Method registries, domain payload validation,
+initialization, byte limits, delivery classifications and DevUI loading remain
+planned. No existing adapter consumes the new package.
+
+Package tests (38), build, typecheck and scoped Biome checks passed. A Bun
+browser-target bundle loaded with standard Web globals and no Node/Bun globals;
+its import metadata excluded Agent/provider code and external imports. This is
+bundle evidence, not browser E2E. Exact commands and review progress are in the
+[delivery tracker](./delivery-plan.md). Architecture and the package README now
+describe the implemented slice. No full-step checkbox is marked complete.

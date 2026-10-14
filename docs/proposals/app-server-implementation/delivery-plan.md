@@ -257,14 +257,48 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | ID | State | Branch / PR | Evidence and next action |
 | --- | --- | --- | --- |
 | Baseline | Recorded | `codex/app-server-development` / `9cc7b8c` | Existing proposals committed unchanged; no implementation claim. |
-| 00 | In review | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | 284-line tracker and index link; local links, code fences and whitespace checks passed. |
-| 01 | Planned | `codex/app-server-01-rpc-envelopes` | First code slice; only the RPC envelope/package boundary. |
+| 00 | Merged | [#9](https://github.com/yxswe/LoopIQ-AgentHarness/pull/9), `codex/app-server-delivery-plan` | Squash-merged into the development branch as `dc01155` on 2026-10-11; document checks passed. |
+| 01 | In review | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes`, base `codex/app-server-development` | Rebased after PR 00 merged; protocol code unchanged. Owner review pending. |
 | 02–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
 paths; exact commands/results/test count; affected Dxx/Txx/AC IDs; documentation
 updates; limitations; next usable interface. Link evidence rather than pasting
 long logs. Keep the source execution checklists consistent with this tracker.
+
+### PR 01 developer evidence (2026-10-11)
+
+Implementation commit: `c6700db` (originally tested as `3a3bba0`); review: PR #10,
+base `codex/app-server-development`. PR #9 was squash-merged as `dc01155`.
+Only PR #10's two commits were rebased; `git range-diff` confirmed both patches
+unchanged and a tree comparison found no content change before this tracker
+update. Existing test evidence still applies; tracker-only changes add no code.
+
+Code: `packages/app-protocol/src/{rpc,index}.ts`; tests: `src/rpc.test.ts`.
+Validation: `npm run test -w @loopiq/app-protocol` discovered/passed 38 tests;
+`npm run typecheck -w @loopiq/app-protocol`, `npm run build -w @loopiq/app-protocol`
+and `npx --no-install biome check packages/app-protocol/src` passed.
+`npm install --package-lock-only --ignore-scripts --offline --no-audit --no-fund`
+updated only the new workspace's lock entries. `git diff --check` passed.
+
+Browser-target build command:
+
+```sh
+bun build ./packages/app-protocol/src/index.ts --target=browser --outfile=/tmp/loopiq-app-protocol-browser.mjs --metafile=/tmp/loopiq-app-protocol-browser-meta.json
+```
+
+The bundle was evaluated with `node --experimental-vm-modules --input-type=module`
+using `SourceTextModule` and `createContext({ TextEncoder, TextDecoder })`.
+The linker rejected external imports. A request parsed as `request` and `[]`
+as `invalid`; metadata contained no Agent/provider or external imports.
+This proves a bundle boundary, not real-browser E2E. Verification used Node
+25.4.0 and Bun 1.3.10.
+
+Partial D01/T01 coverage is recorded in document 01. Architecture and the package
+README describe the slice. Endpoint/domain validation and size enforcement are
+next; existing adapters still use REST/SSE. The root build and runtime regression
+suites were not run for this isolated package slice; the root build writes into
+the read-only `packages/ai` dependency. No milestone or manual E2E is complete.
 
 For each milestone append:
 
