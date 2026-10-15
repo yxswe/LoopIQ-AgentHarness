@@ -280,8 +280,9 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | 02a | Merged | [#11](https://github.com/yxswe/LoopIQ-AgentHarness/pull/11), `codex/app-server-02a-initialization` | Squash-merged into the development branch as `d7bbfd7` on 2026-10-14. |
 | 02b | Merged | [#12](https://github.com/yxswe/LoopIQ-AgentHarness/pull/12), `codex/app-server-02b-errors-and-bounds` | Squash-merged into the development branch as `b30894f` on 2026-10-14. |
 | 03a | Merged | [#13](https://github.com/yxswe/LoopIQ-AgentHarness/pull/13), `codex/app-server-03a-run-contracts` | Squash-merged into the development branch as `208263b` on 2026-10-15. |
-| 03b | In review | [#14](https://github.com/yxswe/LoopIQ-AgentHarness/pull/14), `codex/app-server-03b-catalog-contracts`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
-| 03c–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
+| 03b | Merged | [#14](https://github.com/yxswe/LoopIQ-AgentHarness/pull/14), `codex/app-server-03b-catalog-contracts` | Squash-merged into the development branch as `610264c` on 2026-10-15. |
+| 03c | In progress | `codex/app-server-03c-session-lifecycle`, base `codex/app-server-development` | Developer verification passed; PR creation pending. |
+| 04–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
 paths; exact commands/results/test count; affected Dxx/Txx/AC IDs; documentation
@@ -500,6 +501,39 @@ Manual review: run `npm run test -w @loopiq/app-protocol -- src/catalog.test.ts`
 compare the four method shapes with the README, inspect ready/offline combinations,
 trimmed-name fixtures and rejected history/private operation fields. No server
 is needed. Owner M1 E2E remains Pending; PR 03c (lifecycle/inventory) is next.
+
+### PR 03c developer evidence (2026-10-15)
+
+Implementation/review: pending commit and PR creation. Branch:
+`codex/app-server-03c-session-lifecycle`; base: `codex/app-server-development`
+at `610264c` after #14 merged. Development was fast-forwarded; no merged commits
+were replayed. Code: `packages/app-protocol/src/{session,index}.ts`; fixtures:
+`src/session.test.ts`. Separate lifecycle maps and complete inventory carry
+creation/deletion evidence without history, credentials or backend display names.
+
+Validation from the repository root:
+
+- `npm run test -w @loopiq/app-protocol`: 336 tests passed in six files (58 new).
+- `npm run typecheck -w @loopiq/app-protocol` and `npm run build -w @loopiq/app-protocol`: passed.
+- `npx --no-install biome check packages/app-protocol/src` and `git diff --check`: passed.
+- Five changed Markdown files passed 111 local-link and code-fence checks.
+
+```sh
+bun build ./packages/app-protocol/src/index.ts --target=browser --outfile=/tmp/loopiq-app-protocol-03c-browser.mjs --metafile=/tmp/loopiq-app-protocol-03c-browser-meta.json
+node --experimental-vm-modules /tmp/loopiq-app-protocol-03c-smoke.mjs
+```
+
+Compiled ESM and browser VM lifecycle checks passed with standard Web globals
+and an import-rejecting linker; metadata excluded Agent/provider/external imports.
+This is bundle evidence, not browser/network E2E. No adapters, storage format or
+handlers changed; root build and Agent/CLI regressions were not run. `packages/ai`,
+`history.ts` and `main` are unchanged. Architecture, package README and document 01
+are updated. Partial D01-03/04/05 and T01-01/02/03/06/08 support AC-01/02/17/18/19/20.
+Review found no new injection/ownership boundary; the Session contract owns these shapes.
+
+Manual review: run `npm run test -w @loopiq/app-protocol -- src/session.test.ts`;
+compare frontend/backend creation, deletion states and partial-inventory rejection
+with the README. No server is needed. Owner M1 E2E remains Pending; PR 04 is next.
 
 For each milestone append:
 

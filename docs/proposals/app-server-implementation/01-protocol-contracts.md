@@ -1,7 +1,7 @@
 # 01 — Protocol Contracts
 
-Status: In progress. Delivery PRs 01, 02a, 02b, 03a and 03b implement RPC envelopes,
-initialization/directions, errors, delivery knowledge, byte checks and Run/catalog contracts. Partial
+Status: In progress. Delivery PRs 01, 02a, 02b and 03a–03c implement RPC envelopes,
+initialization/directions, errors, delivery knowledge, byte checks and Run/catalog/lifecycle contracts. Partial
 evidence records below describe that scope; unchecked work and full acceptance
 cases remain incomplete.
 
@@ -36,7 +36,7 @@ and the [implementation index](./README.md) before making changes.
 | [DevUI](../../../packages/devui/public/app.js) | A plain browser script currently has no workspace-module loader. Browser consumption needs an explicit delivery path. |
 
 Placement: `packages/app-protocol/`, private to this workspace as
-`@loopiq/app-protocol`. The package contains RPC/connection, Run, history and catalog contracts with shared
+`@loopiq/app-protocol`. The package contains RPC/connection, Run, history, catalog and Session lifecycle contracts with shared
 UTF-8 bounds. Keep subsequent definitions organized around connection, Session,
 Run, and observation contracts. A small RPC envelope belongs
 with these contracts; do not add a generic application framework.
@@ -358,3 +358,15 @@ Tests validate wire boundaries, not offline rename durability or reconciliation.
 PR 03c retains lifecycle/inventory; PR 04 retains observation, full directional
 maps and browser delivery. No full-step or owner E2E gate is complete; exact
 commands and review status are in the delivery tracker.
+
+### Partial implementation: delivery PR 03c (2026-10-15)
+
+`src/session.ts` defines separate frontend/backend lifecycle method maps,
+initial effective settings, immutable creation evidence, deletion lookup/records
+and complete Runtime inventory. The [package README](../../../packages/app-protocol/README.md#session-lifecycle-and-runtime-inventory)
+fixes encodings and success meanings. All 336 tests passed (58 new); typecheck,
+build, scoped Biome and ESM/browser VM smoke passed. Partial D01-03/04/05 and
+T01-01/02/03/06/08 support AC-01/02/17/18/19/20. These are shape checks, not
+durability, cleanup, writer ownership or reconciliation evidence. PR 04 retains
+observation, full directional maps and browser delivery. No acceptance gate is
+closed; exact commands and review status remain in the delivery tracker.
