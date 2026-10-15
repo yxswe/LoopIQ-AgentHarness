@@ -280,7 +280,7 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | 02a | Merged | [#11](https://github.com/yxswe/LoopIQ-AgentHarness/pull/11), `codex/app-server-02a-initialization` | Squash-merged into the development branch as `d7bbfd7` on 2026-10-14. |
 | 02b | Merged | [#12](https://github.com/yxswe/LoopIQ-AgentHarness/pull/12), `codex/app-server-02b-errors-and-bounds` | Squash-merged into the development branch as `b30894f` on 2026-10-14. |
 | 03a | Merged | [#13](https://github.com/yxswe/LoopIQ-AgentHarness/pull/13), `codex/app-server-03a-run-contracts` | Squash-merged into the development branch as `208263b` on 2026-10-15. |
-| 03b | In progress | `codex/app-server-03b-catalog-contracts`, base `codex/app-server-development` | Developer verification passed; preparing the catalog contract review. |
+| 03b | In review | [#14](https://github.com/yxswe/LoopIQ-AgentHarness/pull/14), `codex/app-server-03b-catalog-contracts`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
 | 03c–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
@@ -455,10 +455,13 @@ Owner M1 E2E is Pending. PR 03b (Session/catalog/inventory) is next.
 
 ### PR 03b developer evidence (2026-10-15)
 
+Implementation: `f2029c4`; review: [#14](https://github.com/yxswe/LoopIQ-AgentHarness/pull/14).
 Branch: `codex/app-server-03b-catalog-contracts`; base:
 `codex/app-server-development` at `208263b` after PR #13 merged. The local
 development branch was fast-forwarded; merged feature commits were not replayed.
-Review URL and implementation commit will be recorded after PR creation.
+The tracker follow-up only records the implementation SHA and review URL;
+tested code is unchanged. Review scope: 82 production lines, 396 total changed
+lines across eight files, with no generated or mechanical changes.
 
 Code: `packages/app-protocol/src/{catalog,index}.ts`; fixtures:
 `src/catalog.test.ts`. Four frontend-only metadata/availability methods and one
