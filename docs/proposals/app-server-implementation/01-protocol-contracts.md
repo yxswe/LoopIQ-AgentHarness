@@ -1,7 +1,7 @@
 # 01 — Protocol Contracts
 
-Status: In progress. Delivery PRs 01, 02a and 02b implement RPC envelopes,
-initialization/directions, errors, delivery knowledge and byte checks. Partial
+Status: In progress. Delivery PRs 01, 02a, 02b and 03a implement RPC envelopes,
+initialization/directions, errors, delivery knowledge, byte checks and Run contracts. Partial
 evidence records below describe that scope; unchecked work and full acceptance
 cases remain incomplete.
 
@@ -36,7 +36,7 @@ and the [implementation index](./README.md) before making changes.
 | [DevUI](../../../packages/devui/public/app.js) | A plain browser script currently has no workspace-module loader. Browser consumption needs an explicit delivery path. |
 
 Placement: `packages/app-protocol/`, private to this workspace as
-`@loopiq/app-protocol`. The package contains RPC/connection contracts and shared
+`@loopiq/app-protocol`. The package contains RPC/connection, Run and history contracts with shared
 UTF-8 bounds. Keep subsequent definitions organized around connection, Session,
 Run, and observation contracts. A small RPC envelope belongs
 with these contracts; do not add a generic application framework.
@@ -324,3 +324,20 @@ evidence for AC-01/AC-02/AC-09/AC-22. Classification decisions, timers, socket
 buffer bounds and business size rejection still need real connection/handler
 owners. No process, network or owner E2E claim is made. PR 03 adds Session/Run
 payloads; PR 04 completes observation contracts and browser delivery.
+
+### Partial implementation: delivery PR 03a (2026-10-14)
+
+`src/run.ts` defines five Run method schemas and schema-derived types for
+identities, lookup knowledge, states, outcomes and retained results.
+`src/history.ts` owns the shared display item contract. The
+[package README](../../../packages/app-protocol/README.md#run-commands-and-retained-results)
+fixes UUID/date-time encodings, exact-target controls and the empty steering
+acknowledgment. All nested public objects reject extra fields.
+
+All 217 package tests passed, including 74 new Run fixtures. Typecheck, build,
+scoped Biome and browser bundle/VM smoke passed. This adds partial D01-03/04/05
+and T01-01/02/03/05/06/08/09 evidence. It validates shapes, not durability or
+execution. Actual response identity/reference checks and Agent-to-wire mapping
+remain with the execution owners. PR 03b retains Session/catalog/inventory;
+PR 04 retains observation, full directional maps and browser delivery. No
+full-step checkbox or owner E2E is complete; exact commands are in the tracker.
