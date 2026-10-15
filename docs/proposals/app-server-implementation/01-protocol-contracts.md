@@ -1,7 +1,7 @@
 # 01 — Protocol Contracts
 
-Status: In progress. Delivery PRs 01, 02a, 02b and 03a implement RPC envelopes,
-initialization/directions, errors, delivery knowledge, byte checks and Run contracts. Partial
+Status: In progress. Delivery PRs 01, 02a, 02b, 03a and 03b implement RPC envelopes,
+initialization/directions, errors, delivery knowledge, byte checks and Run/catalog contracts. Partial
 evidence records below describe that scope; unchecked work and full acceptance
 cases remain incomplete.
 
@@ -36,7 +36,7 @@ and the [implementation index](./README.md) before making changes.
 | [DevUI](../../../packages/devui/public/app.js) | A plain browser script currently has no workspace-module loader. Browser consumption needs an explicit delivery path. |
 
 Placement: `packages/app-protocol/`, private to this workspace as
-`@loopiq/app-protocol`. The package contains RPC/connection, Run and history contracts with shared
+`@loopiq/app-protocol`. The package contains RPC/connection, Run, history and catalog contracts with shared
 UTF-8 bounds. Keep subsequent definitions organized around connection, Session,
 Run, and observation contracts. A small RPC envelope belongs
 with these contracts; do not add a generic application framework.
@@ -341,3 +341,20 @@ execution. Actual response identity/reference checks and Agent-to-wire mapping
 remain with the execution owners. PR 03b retains Session/catalog/inventory;
 PR 04 retains observation, full directional maps and browser delivery. No
 full-step checkbox or owner E2E is complete; exact commands are in the tracker.
+
+### Partial implementation: delivery PR 03b (2026-10-15)
+
+`src/catalog.ts` defines the public `SessionCatalogEntry`, metadata views,
+frontend list/read/rename and Runtime-availability queries, plus revision-only
+`catalog/changed` notifications. The [package README](../../../packages/app-protocol/README.md#session-catalog-and-availability)
+fixes response wrappers, revision/name encodings and ownership. Lifecycle is
+independent of link availability; private operation evidence and history are
+excluded. `history.ts` and internal Session messages remain unchanged.
+
+All 278 package tests passed, including 61 new catalog fixtures. Typecheck,
+build, scoped Biome and compiled ESM/browser VM smoke passed. This adds partial
+D01-03/04/05 and T01-01/02/03/06/08 evidence supporting AC-01/02/17/20.
+Tests validate wire boundaries, not offline rename durability or reconciliation.
+PR 03c retains lifecycle/inventory; PR 04 retains observation, full directional
+maps and browser delivery. No full-step or owner E2E gate is complete; exact
+commands and review status are in the delivery tracker.

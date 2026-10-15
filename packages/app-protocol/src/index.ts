@@ -1,4 +1,14 @@
 export {
+	CATALOG_METHOD_SCHEMAS,
+	type CatalogChanged,
+	CatalogChangedSchema,
+	type CatalogMethodMap,
+	type SessionCatalogEntry,
+	SessionCatalogEntrySchema,
+	type SessionCatalogView,
+	SessionCatalogViewSchema,
+} from "./catalog.ts";
+export {
 	type DeliveryClassification,
 	DeliveryClassificationSchema,
 	type FrontendInitializeParams,

@@ -77,7 +77,8 @@ through the available system boundary, not claims that the future UI exists.
 | 02a | Initialization and directions | Endpoint-specific initialize payloads, version, success/status distinction and method direction rules. No sockets or authentication implementation. |
 | 02b | Delivery, errors and bounds | Delivery classifications, protocol/business errors and UTF-8 byte limits; keep uncertainty separate from execution failure. |
 | 03a | Run contracts | Start/read/steer/abort/result schemas and retained display items; distinguish uncertain delivery, busy rejection, accepted work and settled outcomes. |
-| 03b | Session lifecycle and catalog contracts | Session method schemas, public catalog/availability and authoritative inventory/deletion evidence. |
+| 03b | Session catalog contracts | Public metadata, list/read/rename, Runtime link availability and catalog refresh hints; no Runtime Session loading. |
+| 03c | Session lifecycle and inventory contracts | Create/delete/query schemas, effective settings and authoritative inventory/creation/deletion evidence; separate public and backend payloads. |
 | 04 | Observation contract and browser export | Item/snapshot/update/expiry schemas and browser consumption smoke test; close document 01's contract checklist. |
 | 05 | Durable Session file format | Append/sync and atomic replacement, v2 migration/parser, torn-tail recovery; preserve legacy IDs/context and reject interior corruption. |
 | 06 | Writer ownership | Process-start-aware leases, atomic takeover/release, live-writer and ambiguous-legacy rejection. |
@@ -101,6 +102,12 @@ PR 03 was split before implementation on 2026-10-14. Run contracts (03a) and
 Session/catalog/inventory contracts (03b) have separate owners and fixtures.
 03a includes the history item shape needed by retained results; PR 04 reuses it
 for snapshots/updates and completes directional method maps and browser delivery.
+
+PR 03b was split before implementation on 2026-10-15. Catalog queries/naming
+and lifecycle reconciliation have different authorities and failure fixtures;
+03c retains creation/deletion evidence so each review stays within the size target.
+The owner confirmed that Session messages and display history remain separate;
+`history.ts` stays unchanged. M1 scope and acceptance gates are unchanged.
 
 M1 proves R2's recovery barrier using explicit process-ownership evidence from
 a fixture. Actual managed tool descendant cleanup belongs to PR 14. Keep that
@@ -272,8 +279,9 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | 01 | Merged | [#10](https://github.com/yxswe/LoopIQ-AgentHarness/pull/10), `codex/app-server-01-rpc-envelopes` | Squash-merged into the development branch as `bdfc71f` on 2026-10-14. |
 | 02a | Merged | [#11](https://github.com/yxswe/LoopIQ-AgentHarness/pull/11), `codex/app-server-02a-initialization` | Squash-merged into the development branch as `d7bbfd7` on 2026-10-14. |
 | 02b | Merged | [#12](https://github.com/yxswe/LoopIQ-AgentHarness/pull/12), `codex/app-server-02b-errors-and-bounds` | Squash-merged into the development branch as `b30894f` on 2026-10-14. |
-| 03a | In review | [#13](https://github.com/yxswe/LoopIQ-AgentHarness/pull/13), `codex/app-server-03a-run-contracts`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
-| 03b–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
+| 03a | Merged | [#13](https://github.com/yxswe/LoopIQ-AgentHarness/pull/13), `codex/app-server-03a-run-contracts` | Squash-merged into the development branch as `208263b` on 2026-10-15. |
+| 03b | In review | [#14](https://github.com/yxswe/LoopIQ-AgentHarness/pull/14), `codex/app-server-03b-catalog-contracts`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
+| 03c–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
 paths; exact commands/results/test count; affected Dxx/Txx/AC IDs; documentation
@@ -444,6 +452,54 @@ regressions were not run for this isolated addition; `packages/ai` stays read-on
 Manual review: run `npm run test -w @loopiq/app-protocol -- src/run.test.ts`,
 then compare the five method schemas with the README's success meanings.
 Owner M1 E2E is Pending. PR 03b (Session/catalog/inventory) is next.
+
+### PR 03b developer evidence (2026-10-15)
+
+Implementation: `f2029c4`; review: [#14](https://github.com/yxswe/LoopIQ-AgentHarness/pull/14).
+Branch: `codex/app-server-03b-catalog-contracts`; base:
+`codex/app-server-development` at `208263b` after PR #13 merged. The local
+development branch was fast-forwarded; merged feature commits were not replayed.
+The tracker follow-up only records the implementation SHA and review URL;
+tested code is unchanged. Review scope: 82 production lines, 396 total changed
+lines across eight files, with no generated or mechanical changes.
+
+Code: `packages/app-protocol/src/{catalog,index}.ts`; fixtures:
+`src/catalog.test.ts`. Four frontend-only metadata/availability methods and one
+catalog notification have schemas and derived types. No production adapter
+consumes them yet. `history.ts` and internal Session schemas are unchanged.
+
+Validation from the repository root:
+
+- `npm run test -w @loopiq/app-protocol`: 278 tests passed in five files (61 new).
+- `npm run typecheck -w @loopiq/app-protocol` and
+  `npm run build -w @loopiq/app-protocol`: passed.
+- `npx --no-install biome check packages/app-protocol/src`: passed.
+- `git diff --check`: passed; all 110 local links and code fences in the five
+  changed Markdown files passed validation.
+
+Browser-target command:
+
+```sh
+bun build ./packages/app-protocol/src/index.ts --target=browser --outfile=/tmp/loopiq-app-protocol-03b-browser.mjs --metafile=/tmp/loopiq-app-protocol-03b-browser-meta.json
+node --experimental-vm-modules /tmp/loopiq-app-protocol-03b-smoke.mjs
+```
+
+The temporary smoke script loaded compiled ESM and evaluated the bundle with
+`SourceTextModule` and standard Web globals. It checked offline metadata,
+rename-input/stored-name distinctions, private-field rejection, revision hints
+and response parsing. Its linker rejected external imports; bundle metadata
+excluded Agent/provider and external imports. This is bundle/VM evidence, not
+browser E2E. Root build and Agent/CLI regressions were not run for this isolated
+contract addition; `packages/ai` remains read-only.
+
+Partial D01-03/04/05 and T01-01/02/03/06/08 support AC-01/02/17/20. Architecture,
+package README and document 01 describe the slice. No catalog persistence,
+rename handler, notification delivery or Runtime Session opening is implemented.
+
+Manual review: run `npm run test -w @loopiq/app-protocol -- src/catalog.test.ts`;
+compare the four method shapes with the README, inspect ready/offline combinations,
+trimmed-name fixtures and rejected history/private operation fields. No server
+is needed. Owner M1 E2E remains Pending; PR 03c (lifecycle/inventory) is next.
 
 For each milestone append:
 
