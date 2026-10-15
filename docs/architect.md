@@ -19,7 +19,7 @@ implements one Agent application with HTTP, CLI, and DevUI adapters:
 - `@loopiq/devui` — a minimal web UI (static assets) for exercising the server.
 - `@loopiq/cli` — standalone headless and interactive command-line adapter.
 - `@loopiq/app-protocol` — dependency-leaf RPC envelopes, initialization, errors,
-  delivery classifications, Run contracts, direction rules and byte bounds for the planned
+  delivery classifications, Run/catalog contracts, direction rules and byte bounds for the planned
   app-server split; current adapters do not consume it yet.
 - `integrations/harbor` — Harbor-side import-path adapter and in-container CLI
   supervisor for isolated local evaluations.
@@ -75,9 +75,11 @@ and business failures from transport uncertainty. Shared UTF-8 limits use the
 standard Web `TextEncoder`; the parser rejects oversize text before JSON parsing.
 Run method schemas cover acceptance identity, lookup knowledge, exact control
 and retained terminal results. Shared history items carry display text without
-provider objects. Session/observation payloads, authentication, admission,
-transport integration and business size enforcement remain planned; current
-Server/CLI behavior is unchanged.
+provider objects. Catalog contracts define frontend metadata reads/rename,
+Runtime link availability and revision-only refresh hints; lifecycle metadata
+stays separate from link readiness. Session creation/deletion, inventory,
+observation payloads, authentication, admission, transport integration and
+business size enforcement remain planned; current Server/CLI behavior is unchanged.
 
 The implemented encoding and parser contract is documented in
 [`packages/app-protocol/README.md`](../packages/app-protocol/README.md).

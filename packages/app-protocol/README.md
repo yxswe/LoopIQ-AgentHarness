@@ -2,7 +2,7 @@
 
 Private, browser-compatible wire contracts for the app-server refactor. This
 package implements RPC envelopes, initialization/status schemas, direction rules,
-v1 errors, delivery classifications, UTF-8 size checks and Run contracts. Server and DevUI still
+v1 errors, delivery classifications, UTF-8 size checks, Run and catalog contracts. Server and DevUI still
 use their existing REST/SSE path; no WebSocket handler consumes this package yet.
 
 ## RPC envelope
@@ -90,8 +90,46 @@ generation fencing and execution admission. No connection state machine exists y
 
 Responses follow pending request IDs and are not methods in this registry.
 Direction permission does not validate params/results or imply an installed
-handler. Run schemas are available below; Session schemas and complete directional
-method maps follow in PRs 03b–04.
+handler. Run and catalog schemas are available below; lifecycle/inventory schemas
+and complete directional method maps follow in PRs 03c–04.
+
+## Session catalog and availability
+
+`CATALOG_METHOD_SCHEMAS` defines app-server-owned frontend operations. None is
+forwarded to Runtime as a Session command or opens execution resources.
+
+| Method | Parameters | Success result |
+| --- | --- | --- |
+| `runtime/read` | Exactly `{}` | Existing `RuntimeStatus`: configured service UUID and `offline`, `syncing` or `ready` link state. |
+| `session/list` | Exactly `{}` | `{ catalogRevision, sessions: SessionCatalogEntry[], runtime: RuntimeStatus }`, including an empty list. No pagination in v1. |
+| `session/read` | `sessionId` UUID | `SessionCatalogView`: `{ catalogRevision, session: SessionCatalogEntry, runtime: RuntimeStatus }`. |
+| `session/rename` | `sessionId` UUID, nonblank `name` | The same view after the trimmed name and revisions have been durably committed; available offline. |
+
+`SessionCatalogEntrySchema` contains only the target design's public fields:
+Session/service UUIDs, a nonempty trimmed name, optional Runtime-reported
+`workspaceDir`, creation/catalog-update timestamps, optional `lastActivityAt`,
+`metadataRevision`, and `lifecycle` (`creating`, `ready`, `deleting`, `missing`).
+All timestamps use RFC 3339 date-time and both revision counters are nonnegative
+safe integers. Creating/missing records may lack a resolved workspace. Paths
+remain opaque nonempty strings here; Runtime validates absolute paths and their
+existence on its own machine. Catalog update time does not imply execution activity.
+
+Lifecycle describes persisted catalog state; `runtime` reports current link
+availability for the configured single service. A `ready` catalog row can have
+an offline Runtime. Link readiness alone does not prove a Session is idle,
+unlocked or executable. These replies contain no cached Run state or transcript.
+The server must match service bindings and Session identities independently of
+shape validation and admit new work only for an eligible `ready` Session.
+
+`CatalogChangedSchema` defines `catalog/changed` notification params as exactly
+`{ catalogRevision }`. Send it only to authenticated frontends after a catalog
+commit, prompting a refresh without subscribing to Sessions. List/read/rename
+return the revision of the catalog view they read; per-entry `metadataRevision`
+tracks that entry's changes. Rename accepts surrounding whitespace, which its
+handler trims; schemas do not mutate inputs. Stored names reject edge whitespace,
+including terminal newlines. Extra fields are rejected throughout, including
+private creation/deletion evidence, credentials and history. Durability, revision
+ordering, binding checks and notifications still require real handlers.
 
 ## Run commands and retained results
 
@@ -203,3 +241,5 @@ The 02b fixtures are in `rpc.test.ts` (strict errors), `connection.test.ts`
 (delivery knowledge), and `limits.test.ts` (byte boundaries and the parser guard).
 For 03a, run `npm run test -w @loopiq/app-protocol -- src/run.test.ts` and inspect
 method round trips, ambiguous lookups, terminal outcomes and retained items.
+For 03b, run `npm run test -w @loopiq/app-protocol -- src/catalog.test.ts` and
+inspect offline metadata, name normalization boundaries and private-field rejection.
