@@ -28,6 +28,20 @@ export {
 export { type HistoryItem, HistoryItemSchema } from "./history.ts";
 export { isWithinUtf8Limit, PROTOCOL_LIMITS } from "./limits.ts";
 export {
+	FRONTEND_OBSERVATION_METHOD_SCHEMAS,
+	type FrontendObservationMethodMap,
+	type ObservationExpired,
+	ObservationExpiredSchema,
+	type ObservedSessionUpdate,
+	ObservedSessionUpdateSchema,
+	RUNTIME_OBSERVATION_METHOD_SCHEMAS,
+	type RuntimeObservationMethodMap,
+	type SessionSnapshot,
+	SessionSnapshotSchema,
+	type SessionUpdate,
+	SessionUpdateSchema,
+} from "./observation.ts";
+export {
 	type BusinessErrorReason,
 	BusinessErrorReasonSchema,
 	type ParsedRpcMessage,

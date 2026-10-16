@@ -79,7 +79,8 @@ through the available system boundary, not claims that the future UI exists.
 | 03a | Run contracts | Start/read/steer/abort/result schemas and retained display items; distinguish uncertain delivery, busy rejection, accepted work and settled outcomes. |
 | 03b | Session catalog contracts | Public metadata, list/read/rename, Runtime link availability and catalog refresh hints; no Runtime Session loading. |
 | 03c | Session lifecycle and inventory contracts | Create/delete/query schemas, effective settings and authoritative inventory/creation/deletion evidence; separate public and backend payloads. |
-| 04 | Observation contract and browser export | Item/snapshot/update/expiry schemas and browser consumption smoke test; close document 01's contract checklist. |
+| 04a | Observation contracts | Snapshot/update/expiry schemas and observe/ready/unobserve handshake; preserve existing history items and distinguish both notification hops. |
+| 04b | Complete protocol maps and browser export | Compose all direction-specific method/notification maps, establish the browser delivery path and complete document 01's contract handoff. |
 | 05 | Durable Session file format | Append/sync and atomic replacement, v2 migration/parser, torn-tail recovery; preserve legacy IDs/context and reject interior corruption. |
 | 06 | Writer ownership | Process-start-aware leases, atomic takeover/release, live-writer and ambiguous-legacy rejection. |
 | 07 | Stable Session creation | Immutable creation identity/defaults and authoritative inventory; invalid workspace/configuration cannot become ready. |
@@ -108,6 +109,11 @@ and lifecycle reconciliation have different authorities and failure fixtures;
 03c retains creation/deletion evidence so each review stays within the size target.
 The owner confirmed that Session messages and display history remain separate;
 `history.ts` stays unchanged. M1 scope and acceptance gates are unchanged.
+
+PR 04 was split before implementation on 2026-10-16. Observation payloads and
+handshake fixtures (04a) are one review unit. Complete directional maps and
+browser delivery (04b) are a separate package integration step. This keeps the
+contract and loading checks within the review-size target. M1 gates are unchanged.
 
 M1 proves R2's recovery barrier using explicit process-ownership evidence from
 a fixture. Actual managed tool descendant cleanup belongs to PR 14. Keep that
@@ -281,8 +287,9 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | 02b | Merged | [#12](https://github.com/yxswe/LoopIQ-AgentHarness/pull/12), `codex/app-server-02b-errors-and-bounds` | Squash-merged into the development branch as `b30894f` on 2026-10-14. |
 | 03a | Merged | [#13](https://github.com/yxswe/LoopIQ-AgentHarness/pull/13), `codex/app-server-03a-run-contracts` | Squash-merged into the development branch as `208263b` on 2026-10-15. |
 | 03b | Merged | [#14](https://github.com/yxswe/LoopIQ-AgentHarness/pull/14), `codex/app-server-03b-catalog-contracts` | Squash-merged into the development branch as `610264c` on 2026-10-15. |
-| 03c | In review | [#15](https://github.com/yxswe/LoopIQ-AgentHarness/pull/15), `codex/app-server-03c-session-lifecycle`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
-| 04–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
+| 03c | Merged | [#15](https://github.com/yxswe/LoopIQ-AgentHarness/pull/15), `codex/app-server-03c-session-lifecycle` | Squash-merged into the development branch as `673cc18` on 2026-10-16. |
+| 04a | In progress | `codex/app-server-04a-observation-contracts`, base `codex/app-server-development` | Developer verification passed; PR creation pending. |
+| 04b–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
 paths; exact commands/results/test count; affected Dxx/Txx/AC IDs; documentation
@@ -534,6 +541,42 @@ Review found no new injection/ownership boundary; the Session contract owns thes
 Manual review: run `npm run test -w @loopiq/app-protocol -- src/session.test.ts`;
 compare frontend/backend creation, deletion states and partial-inventory rejection
 with the README. No server is needed. Owner M1 E2E remains Pending; PR 04 is next.
+
+### PR 04a developer evidence (2026-10-16)
+
+Implementation/review: pending commit and PR creation. Branch:
+`codex/app-server-04a-observation-contracts`; base: `codex/app-server-development`
+at `673cc18` after #15 merged. Development was fast-forwarded without replaying
+merged commits. Code: `packages/app-protocol/src/{observation,index}.ts`;
+fixtures: `src/observation.test.ts`. Snapshots, updates and observation control
+carry explicit boundaries and identities. Existing history/Run schemas are reused.
+
+Validation from the repository root:
+
+- `npm run test -w @loopiq/app-protocol`: 392 tests passed in seven files (56 new).
+- `npm run typecheck -w @loopiq/app-protocol` and `npm run build -w @loopiq/app-protocol`: passed.
+- `npx --no-install biome check packages/app-protocol/src` and `git diff --check`: passed.
+- Five changed Markdown files passed 112 local-link and code-fence checks.
+
+```sh
+bun build ./packages/app-protocol/src/index.ts --target=browser --outfile=/tmp/loopiq-app-protocol-04a-browser.mjs --metafile=/tmp/loopiq-app-protocol-04a-browser-meta.json
+node --experimental-vm-modules /tmp/loopiq-app-protocol-04a-smoke.mjs
+```
+
+Compiled ESM and browser VM checks passed for snapshots, ready, expiry and both
+update hops. The VM used standard Web globals and rejected external imports;
+bundle metadata excluded Agent/provider imports. This is not browser/network
+E2E. Architecture, package README, document 01 and this tracker are updated.
+Partial D01-02/03/04/05 and T01-01/02/03/05/06/08/10 support AC-01/02/11/12/13/14/15.
+Ownership review found no rule violations or new injection points. Existing
+adapters do not import P; no storage change, reducer or handler was added.
+Root build and Agent/CLI regressions were not run for this contract-only slice.
+`packages/ai`, `history.ts` and `main` are unchanged.
+
+Manual review: run `npm run test -w @loopiq/app-protocol -- src/observation.test.ts`;
+compare the snapshot/base fields, frontend observation ID, ready parameters and
+expiry reasons with the README. No server is needed. Owner M1 E2E remains Pending;
+PR 04b retains complete directional maps, browser delivery and protocol handoff.
 
 For each milestone append:
 
