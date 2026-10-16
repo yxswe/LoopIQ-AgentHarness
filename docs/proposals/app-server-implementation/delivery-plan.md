@@ -288,7 +288,7 @@ not imply manual acceptance. Rows without an evidence entry remain Planned.
 | 03a | Merged | [#13](https://github.com/yxswe/LoopIQ-AgentHarness/pull/13), `codex/app-server-03a-run-contracts` | Squash-merged into the development branch as `208263b` on 2026-10-15. |
 | 03b | Merged | [#14](https://github.com/yxswe/LoopIQ-AgentHarness/pull/14), `codex/app-server-03b-catalog-contracts` | Squash-merged into the development branch as `610264c` on 2026-10-15. |
 | 03c | Merged | [#15](https://github.com/yxswe/LoopIQ-AgentHarness/pull/15), `codex/app-server-03c-session-lifecycle` | Squash-merged into the development branch as `673cc18` on 2026-10-16. |
-| 04a | In progress | `codex/app-server-04a-observation-contracts`, base `codex/app-server-development` | Developer verification passed; PR creation pending. |
+| 04a | In review | [#16](https://github.com/yxswe/LoopIQ-AgentHarness/pull/16), `codex/app-server-04a-observation-contracts`, base `codex/app-server-development` | Developer verification passed; owner review pending. |
 | 04b–35 | Planned | Not created | Follow the dependency tables; split IDs if review size requires it. |
 
 Append one short entry for each delivered PR: number/URL and base; code/test
@@ -544,7 +544,7 @@ with the README. No server is needed. Owner M1 E2E remains Pending; PR 04 is nex
 
 ### PR 04a developer evidence (2026-10-16)
 
-Implementation/review: pending commit and PR creation. Branch:
+Implementation: `4add320`; review: [#16](https://github.com/yxswe/LoopIQ-AgentHarness/pull/16). Branch:
 `codex/app-server-04a-observation-contracts`; base: `codex/app-server-development`
 at `673cc18` after #15 merged. Development was fast-forwarded without replaying
 merged commits. Code: `packages/app-protocol/src/{observation,index}.ts`;
