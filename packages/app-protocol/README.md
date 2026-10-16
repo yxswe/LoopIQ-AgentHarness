@@ -2,8 +2,9 @@
 
 Private, browser-compatible wire contracts for the app-server refactor. This
 package implements RPC envelopes, initialization/status schemas, direction rules,
-v1 errors, delivery classifications, UTF-8 size checks, Run, catalog and Session lifecycle contracts. Server and DevUI still
-use their existing REST/SSE path; no WebSocket handler consumes this package yet.
+v1 errors, delivery classifications, UTF-8 size checks, and Run, catalog,
+lifecycle and observation contracts. Server and DevUI still use REST/SSE;
+no WebSocket handler consumes this package yet.
 
 ## RPC envelope
 
@@ -90,8 +91,8 @@ generation fencing and execution admission. No connection state machine exists y
 
 Responses follow pending request IDs and are not methods in this registry.
 Direction permission does not validate params/results or imply an installed
-handler. Run, catalog and lifecycle schemas are available below; observation
-schemas and complete directional method maps follow in PR 04.
+handler. Domain schemas are available below; complete directional method maps
+and the browser delivery path follow in PR 04b.
 
 ## Session catalog and availability
 
@@ -220,6 +221,59 @@ response identities, resolve item references and report truthful usage. Mappers
 must construct safe text; schemas cannot redact embedded secrets or prove these
 relationships. Execution, storage, dispatch and sockets remain unimplemented.
 
+## Observation snapshots and updates
+
+`observation.ts` defines the snapshot/ready handshake and notification payloads.
+The method maps derive their TypeScript types from these schemas:
+
+| Direction / method | Parameters | Success result |
+| --- | --- | --- |
+| Backend `session/readSnapshot` | `sessionId` | `SessionSnapshot`, captured at one view boundary. |
+| Frontend `session/observe` | `sessionId` | `{ observationId, snapshot: SessionSnapshot }`; buffering exists, but the client must install the snapshot and send ready. |
+| Frontend `session/ready` | `observationId`, `viewEpoch`, `boundaryRevision` | Exactly `{}`; the matching snapshot installation is accepted and later buffered updates are queued before live delivery. |
+| Frontend `session/unobserve` | `observationId` | Exactly `{}`; removal is idempotent and affects only observation. |
+
+Use `RUNTIME_OBSERVATION_METHOD_SCHEMAS` for backend calls and
+`FRONTEND_OBSERVATION_METHOD_SCHEMAS` for frontend calls. There is no backend
+subscription request. Session, observation and view-epoch IDs are bare UUIDs.
+App-server allocates a fresh observation ID for each attempt. Runtime allocates
+a new epoch when rebuilding a loaded view; it is neither a boot ID nor a saved
+history cursor. Revisions are nonnegative safe integers, scoped to that epoch.
+
+`SessionSnapshot` contains `sessionId`, `viewEpoch`, `boundaryRevision` (W),
+`currentRun` (`RunView` or null), all retained `runs`, committed `items`,
+`activeItems` with accumulated text, and `uncommittedInputs`. Each uncommitted
+input carries `runId`, `submissionId`, and nonempty original `text`. It can
+remain after an interrupted acceptance and must not duplicate a committed user
+item. Empty arrays are explicit. Items reuse the unchanged `HistoryItemSchema`,
+including legacy `runId: null`; they are display history, not compacted context.
+The committed log boundary (B) is internal and is not a wire field.
+
+`SessionUpdateSchema` defines Runtime `session/update` parameters:
+`{ sessionId, viewEpoch, viewRevision, change }`. `change` is exactly one of:
+
+- `run/state`: a full `run: RunView`.
+- `item/upsert`: a full `item: HistoryItem` that replaces older item content.
+- `item/textDelta`: `itemId`, `baseRevision`, new item `revision`, and `delta` text to append verbatim.
+
+Frontend `session/update` uses `ObservedSessionUpdateSchema`: the same fields
+plus required `observationId`. Backend updates reject that field. View revision
+orders all Session changes; item revision identifies one item's text base.
+Clients need the next view revision and the exact item base before applying a
+delta. A complete upsert keeps the item ID through streaming and durable commit.
+
+`ObservationExpiredSchema` fixes `session/observationExpired` parameters as
+`{ observationId, reason }`, sent only to frontends. `resyncRequired` needs a new
+snapshot; `runtimeUnavailable` waits for Runtime readiness; `sessionDeleted`
+ends observation. The notification carries no history or response ID.
+
+All objects reject extra fields. Schemas check shape, not capture consistency,
+identity relationships, revision ordering or durable settlement. R2/R1 must
+capture W and B together; A4 must buffer before capture, validate ready against
+the active attempt and flush after W in order. Those handlers, bounded queues,
+expiry timers and client reducers remain planned. Enforce the existing 16 MiB
+snapshot bound on the full encoded reply, including the frontend wrapper.
+
 ## Errors and delivery knowledge
 
 `RPC_ERROR_CODES` and `RpcErrorSchema` fix the supported v1 error payloads:
@@ -296,3 +350,5 @@ For 03b, run `npm run test -w @loopiq/app-protocol -- src/catalog.test.ts` and
 inspect offline metadata, name normalization boundaries and private-field rejection.
 For 03c, run `npm run test -w @loopiq/app-protocol -- src/session.test.ts` and
 inspect endpoint separation, creation evidence, deletion states and complete scans.
+For 04a, run `npm run test -w @loopiq/app-protocol -- src/observation.test.ts`;
+inspect snapshot fields, both update hops, ready identities and expiry reasons.

@@ -1,7 +1,7 @@
 # 01 — Protocol Contracts
 
-Status: In progress. Delivery PRs 01, 02a, 02b and 03a–03c implement RPC envelopes,
-initialization/directions, errors, delivery knowledge, byte checks and Run/catalog/lifecycle contracts. Partial
+Status: In progress. Delivery PRs 01, 02a, 02b, 03a–03c and 04a implement RPC envelopes,
+initialization/directions, errors, delivery knowledge, byte checks and Run/catalog/lifecycle/observation contracts. Partial
 evidence records below describe that scope; unchecked work and full acceptance
 cases remain incomplete.
 
@@ -36,7 +36,7 @@ and the [implementation index](./README.md) before making changes.
 | [DevUI](../../../packages/devui/public/app.js) | A plain browser script currently has no workspace-module loader. Browser consumption needs an explicit delivery path. |
 
 Placement: `packages/app-protocol/`, private to this workspace as
-`@loopiq/app-protocol`. The package contains RPC/connection, Run, history, catalog and Session lifecycle contracts with shared
+`@loopiq/app-protocol`. The package contains RPC/connection, Run, history, catalog, Session lifecycle and observation contracts with shared
 UTF-8 bounds. Keep subsequent definitions organized around connection, Session,
 Run, and observation contracts. A small RPC envelope belongs
 with these contracts; do not add a generic application framework.
@@ -370,3 +370,17 @@ T01-01/02/03/06/08 support AC-01/02/17/18/19/20. These are shape checks, not
 durability, cleanup, writer ownership or reconciliation evidence. PR 04 retains
 observation, full directional maps and browser delivery. No acceptance gate is
 closed; exact commands and review status remain in the delivery tracker.
+
+### Partial implementation: delivery PR 04a (2026-10-16)
+
+`src/observation.ts` defines snapshots, the three update variants, frontend
+observation identity, ready/unobserve requests and expiry reasons. The
+[package README](../../../packages/app-protocol/README.md#observation-snapshots-and-updates)
+fixes wrappers, UUID epochs and revision encodings. Existing `HistoryItem` and
+`RunView` schemas are reused. Full directional maps, browser delivery and the
+remaining protocol handoff stay in PR 04b. No capture, reducer, buffer, timer or
+network handler is implemented; M1 and T05 execution acceptance remain pending.
+
+All 392 package tests passed (56 new), plus typecheck, build, scoped Biome and
+compiled ESM/browser VM smoke. Partial D01-02/03/04/05 and T01-01/02/03/05/06/08/10
+support AC-01/02/11/12/13/14/15. Exact commands and review status are in the tracker.
