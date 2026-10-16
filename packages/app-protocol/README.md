@@ -2,7 +2,7 @@
 
 Private, browser-compatible wire contracts for the app-server refactor. This
 package implements RPC envelopes, initialization/status schemas, direction rules,
-v1 errors, delivery classifications, UTF-8 size checks, Run and catalog contracts. Server and DevUI still
+v1 errors, delivery classifications, UTF-8 size checks, Run, catalog and Session lifecycle contracts. Server and DevUI still
 use their existing REST/SSE path; no WebSocket handler consumes this package yet.
 
 ## RPC envelope
@@ -90,8 +90,8 @@ generation fencing and execution admission. No connection state machine exists y
 
 Responses follow pending request IDs and are not methods in this registry.
 Direction permission does not validate params/results or imply an installed
-handler. Run and catalog schemas are available below; lifecycle/inventory schemas
-and complete directional method maps follow in PRs 03c–04.
+handler. Run, catalog and lifecycle schemas are available below; observation
+schemas and complete directional method maps follow in PR 04.
 
 ## Session catalog and availability
 
@@ -130,6 +130,57 @@ handler trims; schemas do not mutate inputs. Stored names reject edge whitespace
 including terminal newlines. Extra fields are rejected throughout, including
 private creation/deletion evidence, credentials and history. Durability, revision
 ordering, binding checks and notifications still require real handlers.
+
+## Session lifecycle and Runtime inventory
+
+`FRONTEND_SESSION_METHOD_SCHEMAS` and `RUNTIME_SESSION_METHOD_SCHEMAS` in
+`session.ts` separate the two hops. Their `FrontendSessionMethodMap` and
+`RuntimeSessionMethodMap` types derive from the schemas. All objects reject
+extra fields; IDs are bare UUIDs and timestamps use RFC 3339 date-time.
+
+| Method | Parameters | Success result |
+| --- | --- | --- |
+| Frontend `session/create` | `sessionId`, optional `workspaceDir` and nonblank `name` | `SessionCatalogView` with a required resolved workspace and `ready` entry, plus `settings`; durable Runtime creation and catalog commit are both complete. |
+| Backend `session/create` | `sessionId`, optional `workspaceDir`; no name | `SessionCreation`: `{ sessionId, workspaceDir, createdAt, settings }`, retaining the original resolved values on same-input retry. |
+| Both `session/delete` | `sessionId`, stable `operationId` | `SessionDeletionComplete`: identities, `state: "deleted"`, `startedAt`, `completedAt`. Frontend additionally requires the committed removal's `catalogRevision`. |
+| Both `session/delete/read` | The same two identities | `SessionDeletionLookup`: `notStarted` with no timestamps; `deleting` with `startedAt`; or the complete deletion record. Unavailable knowledge is an RPC error. |
+| Backend `runtime/inventory` | Exactly `{}` | `RuntimeInventory`: `{ complete: true, sessions, deletions }`. No pagination or partial-success variant. |
+
+`SessionSettings` contains only `model: { providerId, modelId }` and
+`thinkingLevel` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`). These are
+the original effective Session settings, not a live configuration view or a
+copy of Provider request policy. Credentials, headers and tool objects are excluded.
+Frontend v1 cannot supply model/settings overrides. Creation starts no Run or
+observation. Name trimming belongs to app-server; directory resolution and
+existence checks belong to Runtime, including for paths absent on app-server.
+
+Each `RuntimeSessionEntry` has `sessionId`, fixed resolved `workspaceDir`,
+`createdAt`, optional execution `lastActivityAt`, `execution`, and `creation`.
+Execution is advisory: `available`, `busy` (accepted/running/settling), `locked`
+(another live writer), or `recoveryRequired`. It grants no reservation or lease;
+Runtime rechecks admission. Entries carry no app-server name or metadata revision.
+Sessions with a deletion intent appear in `deletions`, not in `sessions`.
+
+Creation evidence is `{ kind: "recorded", params: { workspaceDir? }, settings }`.
+Together with the entry's immutable ID, actual cwd and creation time, it recovers
+the original creation result. Preserve supplied cwd exactly, including omission;
+do not replace it with today's defaults. Only matching recorded input can resolve
+a pending create. `{ kind: "unrecorded" }` represents legacy/local Sessions
+without a remote receipt; unreadable evidence must instead fail the scan.
+Later model changes never rewrite initial settings or this evidence.
+
+`deletions` contains only `SessionDeletionRecord` (`deleting` or `deleted`), never
+`notStarted`. Intent blocks work and ID reuse; completion follows durable cleanup
+of Session-owned state and preserves workspace files. Query `deleted` describes
+Runtime evidence; frontend delete success also confirms catalog removal. Missing
+inventory entries cannot complete deletion. Partial/unreadable scans return a
+business error such as `STORAGE_UNAVAILABLE`, preserving existing catalog evidence.
+Oversize inventories must fail explicitly, never truncate into a complete scan.
+
+Schemas validate shapes only. Owners must verify unique/matching identities,
+timestamp ordering, original-input equality, durable commits, full-scan coverage
+and current link generation. No lifecycle handler, filesystem change, automatic
+retry or reconciliation is implemented here.
 
 ## Run commands and retained results
 
@@ -243,3 +294,5 @@ For 03a, run `npm run test -w @loopiq/app-protocol -- src/run.test.ts` and inspe
 method round trips, ambiguous lookups, terminal outcomes and retained items.
 For 03b, run `npm run test -w @loopiq/app-protocol -- src/catalog.test.ts` and
 inspect offline metadata, name normalization boundaries and private-field rejection.
+For 03c, run `npm run test -w @loopiq/app-protocol -- src/session.test.ts` and
+inspect endpoint separation, creation evidence, deletion states and complete scans.
